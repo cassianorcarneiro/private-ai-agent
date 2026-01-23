@@ -1,0 +1,7 @@
+ollama
+duckduckgo-search
+rich
+prompt-toolkit
+datetime
+logging
+threading
