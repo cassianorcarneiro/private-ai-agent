@@ -32,3 +32,6 @@
 2026-01-23 13:33:51,759 - INFO - HTTP Request: GET http://127.0.0.1:11434/api/tags "HTTP/1.1 200 OK"
 2026-01-23 13:41:30,293 - INFO - HTTP Request: GET http://127.0.0.1:11434/api/tags "HTTP/1.1 200 OK"
 2026-01-23 13:42:41,946 - INFO - HTTP Request: GET http://127.0.0.1:11434/api/tags "HTTP/1.1 200 OK"
+2026-01-23 14:10:33,596 - INFO - HTTP Request: GET http://127.0.0.1:11434/api/tags "HTTP/1.1 200 OK"
+2026-01-23 14:32:41,319 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2026-01-23 14:32:41,320 - INFO - Resposta gerada - 2450 caracteres
