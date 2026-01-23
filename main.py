@@ -9,6 +9,7 @@ import threading
 import time
 import json
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class DeepSeekAgent:
     def __init__(self, config: Config):
@@ -143,6 +144,9 @@ class DeepSeekAgent:
         Gera uma resposta usando o modelo DeepSeek
         """
         try:
+            if self.config.ENABLE_MULTI_AGENT:
+                return self._generate_collaborative_response(user_input, search_results)
+
             # Construir o prompt
             if search_results and search_results != "Nenhum resultado encontrado na pesquisa.":
                 prompt = f"""Com base nos resultados de pesquisa abaixo e no seu conhecimento, responda à pergunta do usuário de forma útil, precisa e bem estruturada.
@@ -194,6 +198,92 @@ INSTRUÇÕES:
             self.monitor.logger.error(error_msg)
             self.console.print(f"[dim]Detalhes do erro: {type(e).__name__}[/dim]")
             return error_msg
+
+    def _build_agent_prompt(self, role: dict, user_input: str, search_results: str) -> str:
+        """Cria o prompt específico para um agente colaborativo."""
+        search_context = ""
+        if search_results and search_results != "Nenhum resultado encontrado na pesquisa.":
+            search_context = f"\n\nCONTEXTO DE PESQUISA:\n{search_results}"
+
+        return (
+            "Você é um agente especializado em colaboração.\n"
+            f"Seu papel: {role['name']}.\n"
+            f"Objetivo: {role['goal']}\n"
+            "Responda em português claro e natural.\n"
+            "Seja conciso, direto e traga apenas informações úteis.\n"
+            "Use listas quando apropriado.\n"
+            f"{search_context}\n\n"
+            f"PERGUNTA DO USUÁRIO: {user_input}"
+        )
+
+    def _run_agent(self, role: dict, user_input: str, search_results: str) -> dict:
+        """Executa um agente colaborativo e retorna sua resposta."""
+        prompt = self._build_agent_prompt(role, user_input, search_results)
+        try:
+            response = ollama.generate(
+                model=self.config.MODEL_NAME,
+                prompt=prompt,
+                options={
+                    "temperature": role.get("temperature", 0.4),
+                    "top_p": 0.9,
+                    "num_predict": 800,
+                },
+            )
+            response_text = response.response
+            self.monitor.log_response(prompt, response_text)
+            return {"name": role["name"], "response": response_text}
+        except Exception as e:
+            error_msg = f"Erro no agente {role['name']}: {e}"
+            self.monitor.logger.error(error_msg)
+            return {"name": role["name"], "response": error_msg}
+
+    def _generate_collaborative_response(self, user_input: str, search_results: str) -> str:
+        """Gera resposta final combinando múltiplos agentes."""
+        self.console.print("[dim]🤝 Executando agentes colaborativos...[/dim]")
+        agent_outputs = []
+
+        with ThreadPoolExecutor(max_workers=len(self.config.AGENT_ROLES)) as executor:
+            futures = [
+                executor.submit(self._run_agent, role, user_input, search_results)
+                for role in self.config.AGENT_ROLES
+            ]
+            for future in as_completed(futures):
+                agent_outputs.append(future.result())
+
+        agent_outputs.sort(key=lambda item: item["name"])
+
+        synthesis_prompt = (
+            "Você é o coordenador final que deve sintetizar as respostas abaixo.\n"
+            "Combine as contribuições dos agentes em uma resposta única, clara e útil.\n"
+            "Seja direto, bem estruturado, e mencione limitações quando necessário.\n"
+            "Responda em português claro e natural.\n\n"
+        )
+
+        for output in agent_outputs:
+            synthesis_prompt += (
+                f"AGENTE: {output['name']}\n"
+                f"RESPOSTA:\n{output['response']}\n\n"
+            )
+
+        synthesis_prompt += f"PERGUNTA ORIGINAL: {user_input}"
+
+        try:
+            response = ollama.generate(
+                model=self.config.MODEL_NAME,
+                prompt=synthesis_prompt,
+                options={
+                    "temperature": 0.6,
+                    "top_p": 0.9,
+                    "num_predict": 1200,
+                },
+            )
+            response_text = response.response
+            self.monitor.log_response(synthesis_prompt, response_text)
+            return response_text
+        except Exception as e:
+            error_msg = f"❌ Erro ao sintetizar respostas: {e}"
+            self.monitor.logger.error(error_msg)
+            return error_msg
     
     def process_query(self, user_input: str) -> str:
         """
@@ -228,6 +318,7 @@ INSTRUÇÕES:
             f"🔍 Pesquisas automáticas ativadas\n"
             f"🌐 Conectado ao DuckDuckGo\n"
             f"📊 Monitoramento ativo\n"
+            f"🤝 Colaboração multi-agente: {'ativada' if self.config.ENABLE_MULTI_AGENT else 'desativada'}\n"
             f"\n💬 [bold]Comandos:[/bold]\n"
             f"  • 'sair' - Encerrar\n"
             f"  • 'historico' - Pesquisas recentes\n"
@@ -255,6 +346,9 @@ INSTRUÇÕES:
                     continue
                 elif user_input.lower() == 'status':
                     self._show_system_status()
+                    continue
+                elif user_input.lower() == 'agentes':
+                    self._show_agent_roles()
                     continue
                 elif not user_input:
                     continue
@@ -359,12 +453,23 @@ INSTRUÇÕES:
                 f"📚 Modelos carregados: {model_count}\n"
                 f"🔍 Pesquisas realizadas: {search_count}\n"
                 f"⚙️  Modelo atual: {self.config.MODEL_NAME}\n"
+                f"🤝 Multi-agente: {'ativo' if self.config.ENABLE_MULTI_AGENT else 'inativo'}\n"
                 f"🕒 Hora do sistema: {datetime.now().strftime('%H:%M:%S')}",
                 border_style="blue"
             ))
             
         except Exception as e:
             self.console.print(f"❌ [red]Erro ao verificar status: {e}[/red]")
+
+    def _show_agent_roles(self):
+        """Exibe os agentes colaborativos configurados."""
+        if not self.config.AGENT_ROLES:
+            self.console.print("🤝 Nenhum agente colaborativo configurado.", style="yellow")
+            return
+
+        self.console.print("\n🤝 [bold]Agentes Colaborativos:[/bold]")
+        for role in self.config.AGENT_ROLES:
+            self.console.print(f"  ✅ {role['name']}: {role['goal']}")
 
 def main():
     # Configuração
