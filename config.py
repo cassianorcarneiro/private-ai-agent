@@ -11,3 +11,23 @@ class Config:
     # Configurações de monitoramento
     LOG_FILE = "agent_monitor.log"
     ENABLE_CONSOLE_MONITOR = True
+
+    # Configurações de agentes colaborativos
+    ENABLE_MULTI_AGENT = True
+    AGENT_ROLES = [
+        {
+            "name": "Pesquisador",
+            "goal": "Encontrar fatos relevantes e pontos-chave para responder à pergunta.",
+            "temperature": 0.3,
+        },
+        {
+            "name": "Analista",
+            "goal": "Organizar o raciocínio e explicar o tema de forma clara e estruturada.",
+            "temperature": 0.5,
+        },
+        {
+            "name": "Cético",
+            "goal": "Apontar limitações, ambiguidades e riscos da resposta.",
+            "temperature": 0.2,
+        },
+    ]
