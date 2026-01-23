@@ -1,7 +1,10 @@
-"""
-Utils package for DeepSeek Agent
-Web search and monitoring utilities
-"""
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# AEGIS-MIND
+# CASSIANO RIBEIRO CARNEIRO
+# V1
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
+# Import custom modules
 
 from .web_search import WebSearcher
 from .monitoring import SearchMonitor

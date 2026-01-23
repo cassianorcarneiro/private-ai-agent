@@ -38,3 +38,12 @@
 2026-01-23 14:42:35,109 - INFO - HTTP Request: GET http://127.0.0.1:11434/api/tags "HTTP/1.1 200 OK"
 2026-01-23 14:46:49,700 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
 2026-01-23 14:46:49,701 - INFO - Resposta gerada - 1433 caracteres
+2026-01-23 16:22:24,225 - INFO - HTTP Request: GET http://127.0.0.1:11434/api/tags "HTTP/1.1 200 OK"
+2026-01-23 16:25:56,317 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2026-01-23 16:25:56,318 - INFO - Resposta gerada - 998 caracteres
+2026-01-23 16:28:54,804 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2026-01-23 16:28:54,805 - INFO - Resposta gerada - 2925 caracteres
+2026-01-23 16:32:06,904 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2026-01-23 16:32:06,905 - INFO - Resposta gerada - 1293 caracteres
+2026-01-23 16:37:13,305 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2026-01-23 16:37:13,306 - INFO - Resposta gerada - 4354 caracteres

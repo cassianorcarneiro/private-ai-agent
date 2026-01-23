@@ -1,12 +1,28 @@
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# AEGIS-MIND
+# CASSIANO RIBEIRO CARNEIRO
+# V1
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
+# Import frameworks
+
 import logging
 import threading
 from datetime import datetime
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-import json
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# 
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 class SearchMonitor:
+
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def __init__(self, log_file="search_monitor.log"):
         self.log_file = log_file
         self.console = Console()
@@ -23,6 +39,10 @@ class SearchMonitor:
         )
         self.logger = logging.getLogger(__name__)
     
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def log_search(self, query, results_count, sources=None):
         """Registra uma pesquisa realizada"""
         timestamp = datetime.now().isoformat()
@@ -43,6 +63,10 @@ class SearchMonitor:
             if hasattr(self, 'console_monitor') and self.console_monitor:
                 self._display_search_console(query, results_count, sources)
     
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def log_response(self, prompt, response, tokens_used=None):
         """Registra uma resposta do modelo"""
         timestamp = datetime.now().isoformat()
@@ -58,6 +82,10 @@ class SearchMonitor:
         with self.lock:
             self.logger.info(f"Resposta gerada - {len(response)} caracteres")
     
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def _display_search_console(self, query, results_count, sources):
         """Exibe informações da pesquisa no console de forma formatada"""
         table = Table(show_header=True, header_style="bold magenta")

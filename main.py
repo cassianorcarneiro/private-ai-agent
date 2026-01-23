@@ -1,3 +1,11 @@
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# AEGIS-MIND
+# CASSIANO RIBEIRO CARNEIRO
+# V1
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
+# Import frameworks
+
 import ollama
 from config import Config
 from utils.web_search import WebSearcher
@@ -5,13 +13,20 @@ from utils.monitoring import SearchMonitor
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
-import threading
 import time
-import json
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# 
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
 class DeepSeekAgent:
+
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def __init__(self, config: Config):
         self.config = config
         self.console = Console()
@@ -22,6 +37,10 @@ class DeepSeekAgent:
         # Verificar se o modelo está disponível
         self._check_model()
     
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def _check_model(self):
         """Verifica se o modelo DeepSeek está disponível no Ollama"""
         try:
@@ -86,41 +105,10 @@ class DeepSeekAgent:
             self.console.print("2. Instale um modelo: ollama pull deepseek-coder")
             raise
     
-    def _should_search(self, user_input: str) -> bool:
-        """
-        Determina se uma pesquisa na internet é necessária
-        """
-        search_keywords = [
-            'pesquisar', 'buscar', 'encontrar', 'procurar',
-            'notícias', 'atual', 'recente', 'hoje', 'agora',
-            'internet', 'web', 'online', 'duckduckgo', 'google',
-            'qual é', 'quem é', 'o que é', 'quando', 'onde',
-            'como', 'por que', 'atualização', 'últimas',
-            'novidades', 'preço', 'cotação', 'clima', 'tempo'
-        ]
-        
-        user_input_lower = user_input.lower()
-        
-        # Verificar palavras-chave
-        for keyword in search_keywords:
-            if keyword in user_input_lower:
-                return True
-        
-        # Verificar se é uma pergunta factual
-        question_prefixes = [
-            'qual ', 'quem ', 'o que ', 'onde ', 'quando ',
-            'como ', 'por que ', 'quantos ', 'quantas ', 'quanto '
-        ]
-        if any(user_input_lower.startswith(prefix) for prefix in question_prefixes):
-            return True
-        
-        # Verificar se pergunta sobre eventos atuais
-        current_events = ['eleição', 'presidente', 'governo', 'mercado', 'bolsa', 'bitcoin']
-        if any(event in user_input_lower for event in current_events):
-            return True
-        
-        return False
-    
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def _extract_search_query(self, user_input: str) -> str:
         """
         Extrai a query de pesquisa do input do usuário
@@ -139,6 +127,10 @@ class DeepSeekAgent:
         
         return query.strip()
     
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def generate_response(self, user_input: str, search_results: str = "") -> str:
         """
         Gera uma resposta usando o modelo DeepSeek
@@ -199,6 +191,10 @@ INSTRUÇÕES:
             self.console.print(f"[dim]Detalhes do erro: {type(e).__name__}[/dim]")
             return error_msg
 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def _build_agent_prompt(self, role: dict, user_input: str, search_results: str) -> str:
         """Cria o prompt específico para um agente colaborativo."""
         search_context = ""
@@ -215,6 +211,10 @@ INSTRUÇÕES:
             f"{search_context}\n\n"
             f"PERGUNTA DO USUÁRIO: {user_input}"
         )
+
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
     def _run_agent(self, role: dict, user_input: str, search_results: str) -> dict:
         """Executa um agente colaborativo e retorna sua resposta."""
@@ -236,6 +236,10 @@ INSTRUÇÕES:
             error_msg = f"Erro no agente {role['name']}: {e}"
             self.monitor.logger.error(error_msg)
             return {"name": role["name"], "response": error_msg}
+
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
     def _generate_collaborative_response(self, user_input: str, search_results: str) -> str:
         """Gera resposta final combinando múltiplos agentes."""
@@ -285,6 +289,10 @@ INSTRUÇÕES:
             self.monitor.logger.error(error_msg)
             return error_msg
     
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def process_query(self, user_input: str) -> str:
         """
         Processa a query do usuário e retorna uma resposta
@@ -294,20 +302,21 @@ INSTRUÇÕES:
             border_style="blue"
         ))
         
-        # Determinar se precisa pesquisar
-        if self._should_search(user_input):
-            search_query = self._extract_search_query(user_input)
-            self.console.print(f"🔍 [yellow]Realizando pesquisa: '{search_query}'[/yellow]")
-            search_context = self.searcher.get_search_context(search_query)
-            
-            # Gerar resposta com contexto da pesquisa
-            response = self.generate_response(user_input, search_context)
-        else:
-            # Gerar resposta sem pesquisa
-            response = self.generate_response(user_input)
+        # Realiza a pesquisa
+
+        search_query = self._extract_search_query(user_input)
+        self.console.print(f"🔍 [yellow]Realizando pesquisa: '{search_query}'[/yellow]")
+        search_context = self.searcher.get_search_context(search_query)
+        
+        # Gerar resposta com contexto da pesquisa
+        response = self.generate_response(user_input, search_context)
         
         return response
     
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def chat_loop(self):
         """
         Loop principal de chat
@@ -371,6 +380,10 @@ INSTRUÇÕES:
             except Exception as e:
                 self.console.print(f"❌ Erro: {e}", style="bold red")
     
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def _show_search_history(self):
         """Mostra o histórico de pesquisas"""
         history = self.searcher.get_search_history()
@@ -387,6 +400,10 @@ INSTRUÇÕES:
                 f"{search['results_count']} resultados"
             )
     
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def _show_available_models(self):
         """Mostra modelos disponíveis"""
         try:
@@ -406,6 +423,10 @@ INSTRUÇÕES:
         except Exception as e:
             self.console.print(f"  ❌ Erro ao listar modelos: {e}")
     
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def _test_model(self):
         """Testa o modelo com uma pergunta simples"""
         self.console.print("\n🧪 [bold]Testando o modelo...[/bold]")
@@ -439,6 +460,10 @@ INSTRUÇÕES:
             except Exception as e:
                 self.console.print(f"❌ [red]Erro no teste: {e}[/red]")
     
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def _show_system_status(self):
         """Mostra status do sistema"""
         try:
@@ -461,6 +486,10 @@ INSTRUÇÕES:
         except Exception as e:
             self.console.print(f"❌ [red]Erro ao verificar status: {e}[/red]")
 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # 
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
     def _show_agent_roles(self):
         """Exibe os agentes colaborativos configurados."""
         if not self.config.AGENT_ROLES:
@@ -470,6 +499,10 @@ INSTRUÇÕES:
         self.console.print("\n🤝 [bold]Agentes Colaborativos:[/bold]")
         for role in self.config.AGENT_ROLES:
             self.console.print(f"  ✅ {role['name']}: {role['goal']}")
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# 
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 def main():
     # Configuração
