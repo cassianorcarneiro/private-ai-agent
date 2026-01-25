@@ -1,524 +1,278 @@
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# AEGIS-MIND
+# PRIVATE AI AGENT
 # CASSIANO RIBEIRO CARNEIRO
 # V1
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
-# Import frameworks
-
-import ollama
-from config import Config
-from utils.web_search import WebSearcher
-from utils.monitoring import SearchMonitor
-from rich.console import Console
-from rich.panel import Panel
-from rich.markdown import Markdown
-import time
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from __future__ import annotations
+import json
+from typing import Any, Dict, List, TypedDict, Annotated
+from operator import add
+from pydantic import BaseModel, Field, ValidationError
+from langgraph.graph import StateGraph, END
+from langchain_ollama import ChatOllama
+from ddgs import DDGS
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# 
+# Local configuration (NO getenv)
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
-class DeepSeekAgent:
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL = "deepseek-r1:8b"
+TEMPERATURE_PLANNER = 0.0
+TEMPERATURE_DRAFTERS = 0.3
+TEMPERATURE_AGGREGATOR = 0.1
+DDGS_MAX_RESULTS_PER_QUERY = 5
+MAX_QUERIES = 6
+MAX_SOURCES_IN_PROMPT = 12
 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# State
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
-    def __init__(self, config: Config):
-        self.config = config
-        self.console = Console()
-        self.monitor = SearchMonitor(config.LOG_FILE)
-        self.monitor.console_monitor = config.ENABLE_CONSOLE_MONITOR
-        self.searcher = WebSearcher(self.monitor, config.MAX_SEARCH_RESULTS)
-        
-        # Verificar se o modelo está disponível
-        self._check_model()
+class AgentState(TypedDict):
+    question: str
+    search_queries: List[str]
+    search_results: List[Dict[str, Any]]
+    drafts: Annotated[List[str], add]   # fan-in reducer: concatenates lists
+    final_answer: str
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# Schemas
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
+class SearchPlan(BaseModel):
+    queries: List[str] = Field(..., description="Short web-search queries (3 to 6).")
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# Helpers
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
+def build_llm(temperature: float) -> ChatOllama:
+    return ChatOllama(
+        model=OLLAMA_MODEL,
+        base_url=OLLAMA_BASE_URL,
+        temperature=temperature,
+    )
+
+def _safe_json_extract(text: str) -> Dict[str, Any]:
     
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    """
+    Robust-ish JSON extraction:
+    - Try direct parse
+    - Else find first '{' and last '}' and parse that slice
+    """
+    
+    text = text.strip()
+    
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
 
-    def _check_model(self):
-        """Verifica se o modelo DeepSeek está disponível no Ollama"""
+    l = text.find("{")
+    r = text.rfind("}")
+    
+    if l != -1 and r != -1 and r > l:
         try:
-            # Método corrigido para verificar modelos
-            models_response = ollama.list()
-            
-            self.console.print(f"[dim]Tipo da resposta: {type(models_response)}[/dim]")
-            self.console.print(f"[dim]Atributos disponíveis: {dir(models_response)}[/dim]")
-            
-            # Acessar corretamente a lista de modelos
-            model_names = []
-            model_details = []
-            
-            if hasattr(models_response, 'models') and models_response.models:
-                for model in models_response.models:
-                    model_name = model.model  # Acessar via atributo 'model'
-                    model_names.append(model_name)
-                    model_details.append({
-                        'name': model_name,
-                        'size': model.size,
-                        'modified': model.modified_at,
-                        'parameters': getattr(model.details, 'parameter_size', 'N/A') if model.details else 'N/A'
-                    })
-            
-            self.console.print(f"[dim]Modelos encontrados: {model_names}[/dim]")
-            
-            if not model_names:
-                self.console.print("❌ [red]Nenhum modelo encontrado no Ollama[/red]")
-                raise Exception("Nenhum modelo disponível")
-            
-            # Encontrar modelos DeepSeek
-            deepseek_models = [model for model in model_details if 'deepseek' in model['name'].lower()]
-            
-            if deepseek_models:
-                # Usar o primeiro modelo DeepSeek encontrado
-                selected_model = deepseek_models[0]
-                self.config.MODEL_NAME = selected_model['name']
-                
-                self.console.print(Panel(
-                    f"✅ [green]Modelo selecionado:[/green] {self.config.MODEL_NAME}\n"
-                    f"📊 [cyan]Tamanho:[/cyan] {selected_model['size']/1024/1024/1024:.1f}GB\n"
-                    f"⚙️ [yellow]Parâmetros:[/yellow] {selected_model['parameters']}\n"
-                    f"📅 [magenta]Modificado:[/magenta] {selected_model['modified'].strftime('%Y-%m-%d %H:%M')}",
-                    title="🤖 Modelo Carregado",
-                    border_style="green"
-                ))
-            else:
-                # Usar o primeiro modelo disponível
-                selected_model = model_details[0]
-                self.config.MODEL_NAME = selected_model['name']
-                self.console.print(Panel(
-                    f"⚠️ [yellow]Usando modelo disponível:[/yellow] {self.config.MODEL_NAME}\n"
-                    f"📊 [cyan]Tamanho:[/cyan] {selected_model['size']/1024/1024/1024:.1f}GB",
-                    title="🤖 Modelo Alternativo",
-                    border_style="yellow"
-                ))
-                
-        except Exception as e:
-            self.console.print(f"❌ Erro ao conectar com Ollama: {e}", style="bold red")
-            self.console.print("\n🔧 [yellow]Soluções possíveis:[/yellow]")
-            self.console.print("1. Verifique se o Ollama está rodando: ollama serve")
-            self.console.print("2. Instale um modelo: ollama pull deepseek-coder")
-            raise
+            return json.loads(text[l : r + 1])
+        except Exception:
+            pass
+
+    raise ValueError("Could not parse JSON from model output.")
+
+def _summarize_sources(results: List[Dict[str, Any]], max_items: int) -> str:
     
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-
-    def _extract_search_query(self, user_input: str) -> str:
-        """
-        Extrai a query de pesquisa do input do usuário
-        """
-        # Remove comandos explícitos de pesquisa
-        remove_phrases = [
-            'pesquise por', 'busque por', 'encontre', 'procure por',
-            'pesquisar', 'buscar', 'encontrar', 'procurar',
-            'quero saber sobre', 'preciso de informações sobre',
-            'me mostre sobre', 'me fale sobre'
-        ]
-        
-        query = user_input.lower()
-        for phrase in remove_phrases:
-            query = query.replace(phrase, '')
-        
-        return query.strip()
+    lines = []
+    n = 0
     
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    for item in results:
+        if n >= max_items:
+            break
+        if item.get("error"):
+            continue
+        title = (item.get("title") or "").strip()
+        url = (item.get("url") or item.get("href") or "").strip()
+        body = (item.get("body") or item.get("snippet") or item.get("content") or "").strip()
+        if not (title or url or body):
+            continue
+        body = body[:400]
+        lines.append(f"- {title}\n  {url}\n  {body}")
+        n += 1
+    
+    return "\n".join(lines) if lines else "(No useful sources returned.)"
 
-    def generate_response(self, user_input: str, search_results: str = "") -> str:
-        """
-        Gera uma resposta usando o modelo DeepSeek
-        """
-        try:
-            if self.config.ENABLE_MULTI_AGENT:
-                return self._generate_collaborative_response(user_input, search_results)
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# Nodes
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
-            # Construir o prompt
-            if search_results and search_results != "Nenhum resultado encontrado na pesquisa.":
-                prompt = f"""Com base nos resultados de pesquisa abaixo e no seu conhecimento, responda à pergunta do usuário de forma útil, precisa e bem estruturada.
+def node_plan_search(state: AgentState) -> Dict[str, Any]:
+    llm = build_llm(TEMPERATURE_PLANNER)
 
-RESULTADOS DA PESQUISA:
-{search_results}
+    prompt = (
+        "You are a web-search planner.\n"
+        "Given the user question, produce 3 to 6 short, specific web search queries.\n"
+        "Return ONLY valid JSON in the format:\n"
+        '{"queries":["...","..."]}\n\n'
+        f"User question:\n{state['question']}\n"
+    )
 
-PERGUNTA DO USUÁRIO: {user_input}
+    raw = llm.invoke(prompt).content
+    data = _safe_json_extract(raw)
 
-INSTRUÇÕES:
-- Responda em português claro e natural
-- Seja informativo e direto
-- Use os resultados da pesquisa quando relevantes
-- Se os resultados não forem úteis, use seu conhecimento
-- Formate a resposta de forma organizada"""
-            else:
-                prompt = f"""Responda à seguinte pergunta do usuário de forma útil, precisa e bem estruturada:
+    try:
+        plan = SearchPlan.model_validate(data)
+        queries = [q.strip() for q in plan.queries if q.strip()][:MAX_QUERIES]
+    except ValidationError:
+       
+        # fallback: minimal behavior
+       
+        queries = [state["question"][:120]]
 
-PERGUNTA: {user_input}
+    return {
+        "search_queries": queries,
+        "search_results": [],
+        "drafts": [],
+        "final_answer": "",
+    }
 
-INSTRUÇÕES:
-- Responda em português claro e natural
-- Seja informativo e direto
-- Formate a resposta de forma organizada"""
-            
-            # Gerar resposta
-            self.console.print(f"[dim]🔄 Gerando resposta com {self.config.MODEL_NAME}...[/dim]")
-            
-            response = ollama.generate(
-                model=self.config.MODEL_NAME,
-                prompt=prompt,
-                options={
-                    'temperature': 0.7,
-                    'top_p': 0.9,
-                    'num_predict': 1000
-                }
-            )
-            
-            # Acessar a resposta corretamente
-            response_text = response.response
-            
-            # Registrar no monitor
-            self.monitor.log_response(prompt, response_text)
-            
-            return response_text
-            
-        except Exception as e:
-            error_msg = f"❌ Erro ao gerar resposta: {e}"
-            self.monitor.logger.error(error_msg)
-            self.console.print(f"[dim]Detalhes do erro: {type(e).__name__}[/dim]")
-            return error_msg
+def node_web_search(state: AgentState) -> Dict[str, Any]:
 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    out: List[Dict[str, Any]] = []
+    
+    # DDGS supports context manager in many versions
+    
+    try:
+        with DDGS() as ddgs:
+            for q in state["search_queries"]:
+                try:
+                    
+                    # ddgs.text returns an iterator/list of dicts with keys like title/href/body
+                   
+                    for r in ddgs.text(q, max_results=DDGS_MAX_RESULTS_PER_QUERY):
+                        if isinstance(r, dict):
+                            out.append({"query": q, **r})
+                        else:
+                            out.append({"query": q, "raw": r})
+                except Exception as e:
+                    out.append({"query": q, "error": str(e)})
+    except Exception:
+        
+        # fallback if DDGS doesn't support context manager
+        
+        ddgs = DDGS()
+        
+        for q in state["search_queries"]:
+            try:
+                for r in ddgs.text(q, max_results=DDGS_MAX_RESULTS_PER_QUERY):
+                    if isinstance(r, dict):
+                        out.append({"query": q, **r})
+                    else:
+                        out.append({"query": q, "raw": r})
+            except Exception as e:
+                out.append({"query": q, "error": str(e)})
 
-    def _build_agent_prompt(self, role: dict, user_input: str, search_results: str) -> str:
-        """Cria o prompt específico para um agente colaborativo."""
-        search_context = ""
-        if search_results and search_results != "Nenhum resultado encontrado na pesquisa.":
-            search_context = f"\n\nCONTEXTO DE PESQUISA:\n{search_results}"
+    return {"search_results": out}
 
-        return (
-            "Você é um agente especializado em colaboração.\n"
-            f"Seu papel: {role['name']}.\n"
-            f"Objetivo: {role['goal']}\n"
-            "Responda em português claro e natural.\n"
-            "Seja conciso, direto e traga apenas informações úteis.\n"
-            "Use listas quando apropriado.\n"
-            f"{search_context}\n\n"
-            f"PERGUNTA DO USUÁRIO: {user_input}"
+def make_responder_node(name: str, focus: str):
+    def node(state: AgentState) -> Dict[str, Any]:
+        
+        llm = build_llm(TEMPERATURE_DRAFTERS)
+        sources = _summarize_sources(state["search_results"], MAX_SOURCES_IN_PROMPT)
+
+        prompt = (
+            f"You are {name}.\n"
+            f"Focus: {focus}\n\n"
+            f"User question:\n{state['question']}\n\n"
+            "Web sources (may include noise):\n"
+            f"{sources}\n\n"
+            "Write a concise, well-supported answer.\n"
+            "If a claim is not supported by the sources, explicitly mark uncertainty.\n"
         )
 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-
-    def _run_agent(self, role: dict, user_input: str, search_results: str) -> dict:
-        """Executa um agente colaborativo e retorna sua resposta."""
-        prompt = self._build_agent_prompt(role, user_input, search_results)
-        try:
-            response = ollama.generate(
-                model=self.config.MODEL_NAME,
-                prompt=prompt,
-                options={
-                    "temperature": role.get("temperature", 0.4),
-                    "top_p": 0.9,
-                    "num_predict": 800,
-                },
-            )
-            response_text = response.response
-            self.monitor.log_response(prompt, response_text)
-            return {"name": role["name"], "response": response_text}
-        except Exception as e:
-            error_msg = f"Erro no agente {role['name']}: {e}"
-            self.monitor.logger.error(error_msg)
-            return {"name": role["name"], "response": error_msg}
-
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-
-    def _generate_collaborative_response(self, user_input: str, search_results: str) -> str:
-        """Gera resposta final combinando múltiplos agentes."""
-        self.console.print("[dim]🤝 Executando agentes colaborativos...[/dim]")
-        agent_outputs = []
-
-        with ThreadPoolExecutor(max_workers=len(self.config.AGENT_ROLES)) as executor:
-            futures = [
-                executor.submit(self._run_agent, role, user_input, search_results)
-                for role in self.config.AGENT_ROLES
-            ]
-            for future in as_completed(futures):
-                agent_outputs.append(future.result())
-
-        agent_outputs.sort(key=lambda item: item["name"])
-
-        synthesis_prompt = (
-            "Você é o coordenador final que deve sintetizar as respostas abaixo.\n"
-            "Combine as contribuições dos agentes em uma resposta única, clara e útil.\n"
-            "Seja direto, bem estruturado, e mencione limitações quando necessário.\n"
-            "Responda em português claro e natural.\n\n"
-        )
-
-        for output in agent_outputs:
-            synthesis_prompt += (
-                f"AGENTE: {output['name']}\n"
-                f"RESPOSTA:\n{output['response']}\n\n"
-            )
-
-        synthesis_prompt += f"PERGUNTA ORIGINAL: {user_input}"
-
-        try:
-            response = ollama.generate(
-                model=self.config.MODEL_NAME,
-                prompt=synthesis_prompt,
-                options={
-                    "temperature": 0.6,
-                    "top_p": 0.9,
-                    "num_predict": 1200,
-                },
-            )
-            response_text = response.response
-            self.monitor.log_response(synthesis_prompt, response_text)
-            return response_text
-        except Exception as e:
-            error_msg = f"❌ Erro ao sintetizar respostas: {e}"
-            self.monitor.logger.error(error_msg)
-            return error_msg
+        draft = llm.invoke(prompt).content.strip()
+        return {"drafts": [f"[{name}]\n{draft}"]}
     
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    return node
 
-    def process_query(self, user_input: str) -> str:
-        """
-        Processa a query do usuário e retorna uma resposta
-        """
-        self.console.print(Panel(
-            f"💭 [bold blue]Usuário:[/bold blue] {user_input}",
-            border_style="blue"
-        ))
-        
-        # Realiza a pesquisa
+node_answer_1 = make_responder_node("Agent-1", "clear structured explanation")
+node_answer_2 = make_responder_node("Agent-2", "limitations, caveats, counterpoints")
+node_answer_3 = make_responder_node("Agent-3", "practical steps, recommendations, examples")
 
-        search_query = self._extract_search_query(user_input)
-        self.console.print(f"🔍 [yellow]Realizando pesquisa: '{search_query}'[/yellow]")
-        search_context = self.searcher.get_search_context(search_query)
-        
-        # Gerar resposta com contexto da pesquisa
-        response = self.generate_response(user_input, search_context)
-        
-        return response
+def node_aggregate(state: AgentState) -> Dict[str, Any]:
     
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    llm = build_llm(TEMPERATURE_AGGREGATOR)
 
-    def chat_loop(self):
-        """
-        Loop principal de chat
-        """
-        self.console.print(Panel(
-            f"🤖 [bold green]Agente DeepSeek Ativado[/bold green]\n"
-            f"📚 Modelo: {self.config.MODEL_NAME}\n"
-            f"🔍 Pesquisas automáticas ativadas\n"
-            f"🌐 Conectado ao DuckDuckGo\n"
-            f"📊 Monitoramento ativo\n"
-            f"🤝 Colaboração multi-agente: {'ativada' if self.config.ENABLE_MULTI_AGENT else 'desativada'}\n"
-            f"\n💬 [bold]Comandos:[/bold]\n"
-            f"  • 'sair' - Encerrar\n"
-            f"  • 'historico' - Pesquisas recentes\n"
-            f"  • 'modelos' - Listar modelos\n"
-            f"  • 'teste' - Testar modelo\n"
-            f"  • 'status' - Status do sistema",
-            border_style="green"
-        ))
-        
-        while True:
-            try:
-                user_input = input("\n👤 Você: ").strip()
-                
-                if user_input.lower() == 'sair':
-                    self.console.print("👋 Até logo!", style="bold yellow")
-                    break
-                elif user_input.lower() == 'historico':
-                    self._show_search_history()
-                    continue
-                elif user_input.lower() == 'modelos':
-                    self._show_available_models()
-                    continue
-                elif user_input.lower() == 'teste':
-                    self._test_model()
-                    continue
-                elif user_input.lower() == 'status':
-                    self._show_system_status()
-                    continue
-                elif user_input.lower() == 'agentes':
-                    self._show_agent_roles()
-                    continue
-                elif not user_input:
-                    continue
-                
-                # Processar a query
-                start_time = time.time()
-                response = self.process_query(user_input)
-                response_time = time.time() - start_time
-                
-                # Exibir resposta
-                self.console.print(Panel(
-                    Markdown(response),
-                    title=f"🤖 DeepSeek ({response_time:.1f}s)",
-                    border_style="green"
-                ))
-                
-            except KeyboardInterrupt:
-                self.console.print("\n👋 Encerrado pelo usuário", style="bold yellow")
-                break
-            except Exception as e:
-                self.console.print(f"❌ Erro: {e}", style="bold red")
+    sources = _summarize_sources(state["search_results"], MAX_SOURCES_IN_PROMPT)
+    drafts = "\n\n".join(state["drafts"])
+
+    prompt = (
+        "You are an aggregator.\n"
+        "Combine the three agent drafts into a single final answer.\n"
+        "Rules:\n"
+        "1) Remove redundancy.\n"
+        "2) If agents disagree, explain the disagreement.\n"
+        "3) Do NOT invent facts beyond the sources; mark uncertainty clearly.\n"
+        "4) Keep it direct and complete.\n\n"
+        f"User question:\n{state['question']}\n\n"
+        f"Sources:\n{sources}\n\n"
+        f"Agent drafts:\n{drafts}\n\n"
+        "Final answer:\n"
+    )
+
+    final = llm.invoke(prompt).content.strip()
     
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    return {"final_answer": final}
 
-    def _show_search_history(self):
-        """Mostra o histórico de pesquisas"""
-        history = self.searcher.get_search_history()
-        
-        if not history:
-            self.console.print("📝 Nenhuma pesquisa realizada ainda.", style="yellow")
-            return
-        
-        self.console.print("\n📊 [bold]Histórico de Pesquisas:[/bold]")
-        for i, search in enumerate(history[-5:], 1):
-            timestamp = time.strftime('%H:%M:%S', time.localtime(search['timestamp']))
-            self.console.print(
-                f"  {i}. [{timestamp}] '{search['query']}' - "
-                f"{search['results_count']} resultados"
-            )
+def build_graph():
     
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    g = StateGraph(AgentState)
 
-    def _show_available_models(self):
-        """Mostra modelos disponíveis"""
-        try:
-            models_response = ollama.list()
-            self.console.print("\n📚 [bold]Modelos Disponíveis:[/bold]")
-            
-            if hasattr(models_response, 'models') and models_response.models:
-                for model in models_response.models:
-                    size_gb = model.size / 1024 / 1024 / 1024
-                    params = getattr(model.details, 'parameter_size', 'N/A') if model.details else 'N/A'
-                    
-                    self.console.print(f"  ✅ {model.model}")
-                    self.console.print(f"     📊 {size_gb:.1f}GB | ⚙️ {params} | 📅 {model.modified_at.strftime('%d/%m %H:%M')}")
-            else:
-                self.console.print("  ℹ️  Nenhum modelo encontrado")
-                
-        except Exception as e:
-            self.console.print(f"  ❌ Erro ao listar modelos: {e}")
-    
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    g.add_node("plan_search", node_plan_search)
+    g.add_node("web_search", node_web_search)
+    g.add_node("answer_1", node_answer_1)
+    g.add_node("answer_2", node_answer_2)
+    g.add_node("answer_3", node_answer_3)
+    g.add_node("aggregate", node_aggregate)
 
-    def _test_model(self):
-        """Testa o modelo com uma pergunta simples"""
-        self.console.print("\n🧪 [bold]Testando o modelo...[/bold]")
-        
-        test_prompts = [
-            "Explique o que é Python em uma frase.",
-            "Qual é a capital do Brasil?",
-            "Como fazer um bolo simples?"
-        ]
-        
-        for i, prompt in enumerate(test_prompts, 1):
-            self.console.print(f"\n📝 Teste {i}: {prompt}")
-            
-            try:
-                start_time = time.time()
-                response = ollama.generate(
-                    model=self.config.MODEL_NAME,
-                    prompt=prompt
-                )
-                response_time = time.time() - start_time
-                
-                if hasattr(response, 'response'):
-                    self.console.print(Panel(
-                        response.response,
-                        title=f"✅ Resposta ({response_time:.1f}s)",
-                        border_style="green"
-                    ))
-                else:
-                    self.console.print("❌ [red]Resposta inesperada do modelo[/red]")
-                    
-            except Exception as e:
-                self.console.print(f"❌ [red]Erro no teste: {e}[/red]")
-    
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    g.set_entry_point("plan_search")
+    g.add_edge("plan_search", "web_search")
 
-    def _show_system_status(self):
-        """Mostra status do sistema"""
-        try:
-            models_response = ollama.list()
-            model_count = len(models_response.models) if hasattr(models_response, 'models') else 0
-            
-            search_history = self.searcher.get_search_history()
-            search_count = len(search_history)
-            
-            self.console.print(Panel(
-                f"🤖 [bold]Status do Sistema[/bold]\n\n"
-                f"📚 Modelos carregados: {model_count}\n"
-                f"🔍 Pesquisas realizadas: {search_count}\n"
-                f"⚙️  Modelo atual: {self.config.MODEL_NAME}\n"
-                f"🤝 Multi-agente: {'ativo' if self.config.ENABLE_MULTI_AGENT else 'inativo'}\n"
-                f"🕒 Hora do sistema: {datetime.now().strftime('%H:%M:%S')}",
-                border_style="blue"
-            ))
-            
-        except Exception as e:
-            self.console.print(f"❌ [red]Erro ao verificar status: {e}[/red]")
+    # fan-out
 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-    # 
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    g.add_edge("web_search", "answer_1")
+    g.add_edge("web_search", "answer_2")
+    g.add_edge("web_search", "answer_3")
 
-    def _show_agent_roles(self):
-        """Exibe os agentes colaborativos configurados."""
-        if not self.config.AGENT_ROLES:
-            self.console.print("🤝 Nenhum agente colaborativo configurado.", style="yellow")
-            return
+    # fan-in
 
-        self.console.print("\n🤝 [bold]Agentes Colaborativos:[/bold]")
-        for role in self.config.AGENT_ROLES:
-            self.console.print(f"  ✅ {role['name']}: {role['goal']}")
+    g.add_edge("answer_1", "aggregate")
+    g.add_edge("answer_2", "aggregate")
+    g.add_edge("answer_3", "aggregate")
+
+    g.add_edge("aggregate", END)
+
+    return g.compile()
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# 
+# Main
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 def main():
-    # Configuração
-    config = Config()
-    
-    try:
-        # Inicializar agente
-        agent = DeepSeekAgent(config)
-        
-        # Iniciar chat
-        agent.chat_loop()
-        
-    except Exception as e:
-        console = Console()
-        console.print(f"❌ Erro ao iniciar agente: {e}", style="bold red")
-        console.print("\n💡 Execute 'ollama serve' em outro terminal e tente novamente.")
+    question = input("Pergunta: ").strip()
+    app = build_graph()
+
+    init_state: AgentState = {
+        "question": question,
+        "search_queries": [],
+        "search_results": [],
+        "drafts": [],
+        "final_answer": "",
+    }
+
+    out = app.invoke(init_state)
+    print("\n=== RESPOSTA FINAL ===\n")
+    print(out["final_answer"])
 
 if __name__ == "__main__":
     main()

@@ -61,13 +61,11 @@ def instalar_libraries():
     # Lista de pacotes a instalar: (nome do import, nome no pip se for diferente)
     
     bibliotecas = [
-        ('ollama',),
-        ('duckduckgo-search',),
-        ('rich',),
-        ('prompt-toolkit',),
-        ('datetime',),
-        ('logging',),
-        ('threading',),
+        ('langgraph',),
+        ('ddgs',),
+        ('langchain',),
+        ('langchain-ollama',),
+        ('pydantic',),
     ]
 
     for args in bibliotecas:
