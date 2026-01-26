@@ -12,7 +12,7 @@ Notes:
 - ddgs package provides DDGS class. Some environments still use duckduckgo_search.
 This file supports both imports.
 
-The algorithm considers using the deepseek-r1:8b model (it is possible to change it in the config.py file).
+The algorithm considers using the "mixtral:8x7b" model (it is possible to change it in the config.py file).
 
 (1) Install Ollama
 (2) Open the terminal in Windows
