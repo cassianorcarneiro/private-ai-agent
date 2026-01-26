@@ -5,6 +5,9 @@
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 from __future__ import annotations
+
+import os
+from dataclasses import dataclass
 import json
 from typing import Any, Dict, List, TypedDict, Annotated
 from operator import add
@@ -12,26 +15,23 @@ from pydantic import BaseModel, Field, ValidationError
 from langgraph.graph import StateGraph, END
 from langchain_ollama import ChatOllama
 from ddgs import DDGS
+from rich.console import Console
+from rich.panel import Panel
+from rich.markdown import Markdown
+import ollama
+
+from config import Config
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# Local configuration (NO getenv)
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-
-OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "deepseek-r1:8b"
-TEMPERATURE_PLANNER = 0.0
-TEMPERATURE_DRAFTERS = 0.3
-TEMPERATURE_AGGREGATOR = 0.1
-DDGS_MAX_RESULTS_PER_QUERY = 5
-MAX_QUERIES = 6
-MAX_SOURCES_IN_PROMPT = 12
-
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# State
+# Graph state
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 class AgentState(TypedDict):
+    
+    history: List[Dict[str, str]]  # [{"role":"user|assistant","content":"..."}]
+
     question: str
+
     search_queries: List[str]
     search_results: List[Dict[str, Any]]
     drafts: Annotated[List[str], add]   # fan-in reducer: concatenates lists
@@ -45,234 +45,355 @@ class SearchPlan(BaseModel):
     queries: List[str] = Field(..., description="Short web-search queries (3 to 6).")
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# Helpers
+# Core class
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
-def build_llm(temperature: float) -> ChatOllama:
-    return ChatOllama(
-        model=OLLAMA_MODEL,
-        base_url=OLLAMA_BASE_URL,
-        temperature=temperature,
-    )
+@dataclass
+class MultiAgentWebAssistant:
 
-def _safe_json_extract(text: str) -> Dict[str, Any]:
-    
-    """
-    Robust-ish JSON extraction:
-    - Try direct parse
-    - Else find first '{' and last '}' and parse that slice
-    """
-    
-    text = text.strip()
-    
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
+    def __init__(self, config: Config):
 
-    l = text.find("{")
-    r = text.rfind("}")
-    
-    if l != -1 and r != -1 and r > l:
+        self.config = config
+        self.console = Console()
+        
+        self.history: List[Dict[str, str]] = None  # type: ignore
+
+        self._check_model()
+
+        if self.history is None:
+            self.history = []
+
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # Check model
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
+    def _check_model(self):
+
         try:
-            return json.loads(text[l : r + 1])
+            models_response = ollama.list()
+            
+            model_names = []
+            model_details = []
+            
+            if hasattr(models_response, 'models') and models_response.models:
+                for model in models_response.models:
+                    model_name = model.model
+                    model_names.append(model_name)
+                    model_details.append({
+                        'name': model_name,
+                        'size': model.size,
+                        'modified': model.modified_at,
+                        'parameters': getattr(model.details, 'parameter_size', 'N/A') if model.details else 'N/A'
+                    })
+            
+            if not model_names:
+                self.console.print("❌ [red]No models found in Ollama[/red]")
+                raise Exception("No models available")
+            
+            # Find DeepSeek models
+
+            selected_model = [
+                model for model in model_details
+                if self.config.ollama_model in model['name'].lower()
+            ]
+            
+            if selected_model:
+
+                # Use the first DeepSeek model found
+
+                selected_model = selected_model[0]
+                self.config.ollama_model = selected_model['name']
+                
+                self.console.print(Panel(
+                    f"✅ [green]Selected model:[/green] {self.config.ollama_model}\n"
+                    f"📊 [cyan]Size:[/cyan] {selected_model['size']/1024/1024/1024:.1f}GB\n"
+                    f"⚙️  [yellow]Parameters:[/yellow] {selected_model['parameters']}\n"
+                    f"📅 [magenta]Last modified date:[/magenta] "
+                    f"{selected_model['modified'].strftime('%Y-%m-%d %H:%M')}",
+                    title="🤖 Loaded Model",
+                    border_style="green"
+                ))
+
+            else:
+
+                # Use the first available model
+
+                selected_model = model_details[0]
+                self.config.ollama_model = selected_model['name']
+                self.console.print(Panel(
+                    f"⚠️ [yellow]Using available model:[/yellow] {self.config.ollama_model}\n"
+                    f"📊 [cyan]Size:[/cyan] {selected_model['size']/1024/1024/1024:.1f}GB",
+                    title="🤖 Alternative Model",
+                    border_style="yellow"
+                ))
+                
+        except Exception as e:
+            self.console.print(f"❌ Error connecting to Ollama: {e}", style="bold red")
+            self.console.print("\n🔧 [yellow]Possible solutions:[/yellow]")
+            self.console.print("1. Check if Ollama is running: ollama serve")
+            self.console.print("2. Install a model: ollama pull deepseek-coder")
+            raise
+    
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # Create Ollama LLM session
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
+    def _llm(self, temperature: float) -> ChatOllama:
+        return ChatOllama(
+            model=self.config.ollama_model,
+            base_url=self.config.ollama_base_url,
+            temperature=temperature,
+        )
+    
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # Utilities
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+
+    @staticmethod
+    def _safe_json_extract(text: str) -> Dict[str, Any]:
+        text = text.strip()
+        try:
+            return json.loads(text)
         except Exception:
             pass
 
-    raise ValueError("Could not parse JSON from model output.")
+        l = text.find("{")
+        r = text.rfind("}")
+        if l != -1 and r != -1 and r > l:
+            return json.loads(text[l : r + 1])
 
-def _summarize_sources(results: List[Dict[str, Any]], max_items: int) -> str:
+        raise ValueError("Could not parse JSON from model output.")
+
+    @staticmethod
+    def _summarize_sources(results: List[Dict[str, Any]], max_items: int) -> str:
+        
+        lines: List[str] = []
+        n = 0
+        
+        for item in results:
+            if n >= max_items:
+                break
+            if item.get("error"):
+                continue
+
+            title = (item.get("title") or "").strip()
+            url = (item.get("url") or item.get("href") or "").strip()
+            body = (item.get("body") or item.get("snippet") or item.get("content") or "").strip()
+            if not (title or url or body):
+                continue
+
+            lines.append(f"- {title}\n  {url}\n  {body[:400]}")
+            n += 1
+
+        return "\n".join(lines) if lines else "(No useful sources returned.)"
+
+    def _history_block(self, max_turns: int = 6) -> str:
+
+        recent = self.history[-2 * max_turns :]
+        out = []
+
+        for m in recent:
+            role = m["role"]
+            out.append(f"{role.upper()}: {m['content']}")
+        
+        return "\n".join(out) if out else "(no prior context)"
     
-    lines = []
-    n = 0
-    
-    for item in results:
-        if n >= max_items:
-            break
-        if item.get("error"):
-            continue
-        title = (item.get("title") or "").strip()
-        url = (item.get("url") or item.get("href") or "").strip()
-        body = (item.get("body") or item.get("snippet") or item.get("content") or "").strip()
-        if not (title or url or body):
-            continue
-        body = body[:400]
-        lines.append(f"- {title}\n  {url}\n  {body}")
-        n += 1
-    
-    return "\n".join(lines) if lines else "(No useful sources returned.)"
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # Graph nodes (methods)
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# Nodes
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    def node_plan_search(self, state: AgentState) -> Dict[str, Any]:
+        llm = self._llm(self.config.temperature_planner)
 
-def node_plan_search(state: AgentState) -> Dict[str, Any]:
-    llm = build_llm(TEMPERATURE_PLANNER)
+        prompt = (
+            "You are a web-search planner.\n"
+            "Given the user question and recent chat context, output 3 to 6 short web queries.\n"
+            'Return ONLY JSON: {"queries":["..."]}\n\n'
+            f"Recent chat context:\n{self._history_block()}\n\n"
+            f"User question:\n{state['question']}\n"
+        )
 
-    prompt = (
-        "You are a web-search planner.\n"
-        "Given the user question, produce 3 to 6 short, specific web search queries.\n"
-        "Return ONLY valid JSON in the format:\n"
-        '{"queries":["...","..."]}\n\n'
-        f"User question:\n{state['question']}\n"
-    )
+        raw = llm.invoke(prompt).content
+        try:
+            data = self._safe_json_extract(raw)
+            plan = SearchPlan.model_validate(data)
+            queries = [q.strip() for q in plan.queries if q.strip()][: self.config.max_queries]
+            if not queries:
+                queries = [state["question"][:120]]
+        except (ValueError, ValidationError):
+            queries = [state["question"][:120]]
 
-    raw = llm.invoke(prompt).content
-    data = _safe_json_extract(raw)
+        return {"search_queries": queries, "search_results": [], "drafts": [], "final_answer": ""}
 
-    try:
-        plan = SearchPlan.model_validate(data)
-        queries = [q.strip() for q in plan.queries if q.strip()][:MAX_QUERIES]
-    except ValidationError:
-       
-        # fallback: minimal behavior
-       
-        queries = [state["question"][:120]]
+    def node_web_search(self, state: AgentState) -> Dict[str, Any]:
+        
+        out: List[Dict[str, Any]] = []
 
-    return {
-        "search_queries": queries,
-        "search_results": [],
-        "drafts": [],
-        "final_answer": "",
-    }
-
-def node_web_search(state: AgentState) -> Dict[str, Any]:
-
-    out: List[Dict[str, Any]] = []
-    
-    # DDGS supports context manager in many versions
-    
-    try:
-        with DDGS() as ddgs:
+        try:
+            with DDGS() as ddgs:
+                for q in state["search_queries"]:
+                    try:
+                        for r in ddgs.text(q, max_results=self.config.ddgs_max_results_per_query):
+                            if isinstance(r, dict):
+                                out.append({"query": q, **r})
+                            else:
+                                out.append({"query": q, "raw": r})
+                    except Exception as e:
+                        out.append({"query": q, "error": str(e)})
+        except Exception:
+            ddgs = DDGS()
             for q in state["search_queries"]:
                 try:
-                    
-                    # ddgs.text returns an iterator/list of dicts with keys like title/href/body
-                   
-                    for r in ddgs.text(q, max_results=DDGS_MAX_RESULTS_PER_QUERY):
+                    for r in ddgs.text(q, max_results=self.config.ddgs_max_results_per_query):
                         if isinstance(r, dict):
                             out.append({"query": q, **r})
                         else:
                             out.append({"query": q, "raw": r})
                 except Exception as e:
                     out.append({"query": q, "error": str(e)})
-    except Exception:
-        
-        # fallback if DDGS doesn't support context manager
-        
-        ddgs = DDGS()
-        
-        for q in state["search_queries"]:
-            try:
-                for r in ddgs.text(q, max_results=DDGS_MAX_RESULTS_PER_QUERY):
-                    if isinstance(r, dict):
-                        out.append({"query": q, **r})
-                    else:
-                        out.append({"query": q, "raw": r})
-            except Exception as e:
-                out.append({"query": q, "error": str(e)})
 
-    return {"search_results": out}
+        return {"search_results": out}
 
-def make_responder_node(name: str, focus: str):
-    def node(state: AgentState) -> Dict[str, Any]:
-        
-        llm = build_llm(TEMPERATURE_DRAFTERS)
-        sources = _summarize_sources(state["search_results"], MAX_SOURCES_IN_PROMPT)
+    def node_answer(self, name: str, focus: str):
+        def _node(state: AgentState) -> Dict[str, Any]:
+            llm = self._llm(self.config.temperature_drafters)
+            sources = self._summarize_sources(state["search_results"], self.config.max_sources_in_prompt)
+
+            prompt = (
+                f"You are {name}.\nFocus: {focus}\n\n"
+                f"Recent chat context:\n{self._history_block()}\n\n"
+                f"User question:\n{state['question']}\n\n"
+                f"Sources:\n{sources}\n\n"
+                "Write a concise, well-supported answer. Mark uncertainty when needed.\n"
+            )
+
+            draft = llm.invoke(prompt).content.strip()
+            return {"drafts": [f"[{name}]\n{draft}"]}
+        return _node
+
+    def node_aggregate(self, state: AgentState) -> Dict[str, Any]:
+        llm = self._llm(self.config.temperature_aggregator)
+        sources = self._summarize_sources(state["search_results"], self.config.max_sources_in_prompt)
+        drafts = "\n\n".join(state["drafts"])
 
         prompt = (
-            f"You are {name}.\n"
-            f"Focus: {focus}\n\n"
+            "You are an aggregator.\n"
+            "Combine drafts into one final answer. No hallucinations; mark uncertainty.\n\n"
+            f"Recent chat context:\n{self._history_block()}\n\n"
             f"User question:\n{state['question']}\n\n"
-            "Web sources (may include noise):\n"
-            f"{sources}\n\n"
-            "Write a concise, well-supported answer.\n"
-            "If a claim is not supported by the sources, explicitly mark uncertainty.\n"
+            f"Sources:\n{sources}\n\n"
+            f"Drafts:\n{drafts}\n\n"
+            "Final answer:\n"
         )
 
-        draft = llm.invoke(prompt).content.strip()
-        return {"drafts": [f"[{name}]\n{draft}"]}
-    
-    return node
+        final = llm.invoke(prompt).content.strip()
+        return {"final_answer": final}
 
-node_answer_1 = make_responder_node("Agent-1", "clear structured explanation")
-node_answer_2 = make_responder_node("Agent-2", "limitations, caveats, counterpoints")
-node_answer_3 = make_responder_node("Agent-3", "practical steps, recommendations, examples")
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+    # Graph build + run
+    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
-def node_aggregate(state: AgentState) -> Dict[str, Any]:
-    
-    llm = build_llm(TEMPERATURE_AGGREGATOR)
+    def build_graph(self):
+        g = StateGraph(AgentState)
 
-    sources = _summarize_sources(state["search_results"], MAX_SOURCES_IN_PROMPT)
-    drafts = "\n\n".join(state["drafts"])
+        g.add_node("plan_search", self.node_plan_search)
+        g.add_node("web_search", self.node_web_search)
+        g.add_node("answer_1", self.node_answer("Agent-1", "clear structured explanation"))
+        g.add_node("answer_2", self.node_answer("Agent-2", "limitations, caveats, counterpoints"))
+        g.add_node("answer_3", self.node_answer("Agent-3", "practical steps, recommendations, examples"))
+        g.add_node("aggregate", self.node_aggregate)
+        
+        g.set_entry_point("plan_search")
+        g.add_edge("plan_search", "web_search")
 
-    prompt = (
-        "You are an aggregator.\n"
-        "Combine the three agent drafts into a single final answer.\n"
-        "Rules:\n"
-        "1) Remove redundancy.\n"
-        "2) If agents disagree, explain the disagreement.\n"
-        "3) Do NOT invent facts beyond the sources; mark uncertainty clearly.\n"
-        "4) Keep it direct and complete.\n\n"
-        f"User question:\n{state['question']}\n\n"
-        f"Sources:\n{sources}\n\n"
-        f"Agent drafts:\n{drafts}\n\n"
-        "Final answer:\n"
-    )
+        # fan-out
+        g.add_edge("web_search", "answer_1")
+        g.add_edge("web_search", "answer_2")
+        g.add_edge("web_search", "answer_3")
 
-    final = llm.invoke(prompt).content.strip()
-    
-    return {"final_answer": final}
+        # fan-in
+        g.add_edge("answer_1", "aggregate")
+        g.add_edge("answer_2", "aggregate")
+        g.add_edge("answer_3", "aggregate")
 
-def build_graph():
-    
-    g = StateGraph(AgentState)
+        g.add_edge("aggregate", END)
 
-    g.add_node("plan_search", node_plan_search)
-    g.add_node("web_search", node_web_search)
-    g.add_node("answer_1", node_answer_1)
-    g.add_node("answer_2", node_answer_2)
-    g.add_node("answer_3", node_answer_3)
-    g.add_node("aggregate", node_aggregate)
+        return g.compile()
 
-    g.set_entry_point("plan_search")
-    g.add_edge("plan_search", "web_search")
+    def chat_loop_ollama(model: str):
+        messages = [
+            {"role": "system", "content": "Responda em pt-BR. Seja objetivo."}
+        ]
 
-    # fan-out
+        while True:
+            user_input = input("Você: ").strip()
+            if user_input.lower() in {"sair", "exit", "quit"}:
+                break
+            if not user_input:
+                continue
 
-    g.add_edge("web_search", "answer_1")
-    g.add_edge("web_search", "answer_2")
-    g.add_edge("web_search", "answer_3")
+            messages.append({"role": "user", "content": user_input})
 
-    # fan-in
+            res = ollama.chat(model=model, messages=messages)
+            content = (res.message.content or "").strip() or (getattr(res.message, "thinking", "") or "").strip()
 
-    g.add_edge("answer_1", "aggregate")
-    g.add_edge("answer_2", "aggregate")
-    g.add_edge("answer_3", "aggregate")
+            messages.append({"role": "assistant", "content": content})
+            print("\nAgente:", content, "\n")
 
-    g.add_edge("aggregate", END)
+    def ask(self, question: str) -> str:
+        app = self.build_graph()
 
-    return g.compile()
+        init_state: AgentState = {
+            "history": self.history,
+            "question": question,
+            "search_queries": [],
+            "search_results": [],
+            "drafts": [],
+            "final_answer": "",
+        }
 
+        out = app.invoke(init_state)
+        answer = out["final_answer"]
+
+        # Atualiza memória da sessão (fora do grafo)
+        self.history.append({"role": "user", "content": question})
+        self.history.append({"role": "assistant", "content": answer})
+
+        return answer
+        
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# Main
+# Graph build + run
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 def main():
-    question = input("Pergunta: ").strip()
-    app = build_graph()
 
-    init_state: AgentState = {
-        "question": question,
-        "search_queries": [],
-        "search_results": [],
-        "drafts": [],
-        "final_answer": "",
-    }
+    config = Config()
 
-    out = app.invoke(init_state)
-    print("\n=== RESPOSTA FINAL ===\n")
-    print(out["final_answer"])
+    assistant = MultiAgentWebAssistant(config=config)
+
+    assistant.console.print(Panel('Type "exit" to close.',
+            title="",
+            border_style="white"
+        ))
+
+    while True:
+        
+        print('\n')
+        q = input("User question: ").strip()
+        print('\n')
+
+        if not q:
+            continue
+        if q.lower() in {"sair", "exit", "quit"}:
+            break
+        
+        a = assistant.ask(q)
+        
+        assistant.console.print(Panel(a,
+            title="🤖 Response",
+            border_style="blue"
+        ))
 
 if __name__ == "__main__":
+    os.system('cls')
     main()

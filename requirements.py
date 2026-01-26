@@ -1,66 +1,68 @@
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# AEGIS-MIND
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# PRIVATE AI AGENT
 # CASSIANO RIBEIRO CARNEIRO
 # V1
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-# Importando frameworks
+# Importing frameworks
 
 import importlib
 import subprocess
 import sys
 import os
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# Intalar frameworks necessários
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Install required frameworks
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-def instalar_libraries():
+def install_libraries():
 
-    def corrigir_pandas_ta():
+    def fix_pandas_ta():
         python_exe = sys.executable
         venv_path = os.path.dirname(os.path.dirname(python_exe))
         site_packages = os.path.join(venv_path, "Lib", "site-packages")
         pandas_ta_path = os.path.join(site_packages, "pandas_ta")
 
         if not os.path.isdir(pandas_ta_path):
-            print("Pasta pandas_ta não encontrada em:", pandas_ta_path)
+            print("pandas_ta folder not found at:", pandas_ta_path)
             return
 
-        corrigidos = 0
+        fixed = 0
         for root, _, files in os.walk(pandas_ta_path):
             for f in files:
                 if f.endswith(".py"):
-                    arquivo = os.path.join(root, f)
-                    with open(arquivo, "r", encoding="utf-8") as file:
-                        conteudo = file.read()
-                    if "from numpy import NaN" in conteudo:
-                        novo_conteudo = conteudo.replace(
+                    file_path = os.path.join(root, f)
+                    with open(file_path, "r", encoding="utf-8") as file:
+                        content = file.read()
+                    if "from numpy import NaN" in content:
+                        new_content = content.replace(
                             "from numpy import NaN",
                             "from numpy import nan"
                         )
-                        with open(arquivo, "w", encoding="utf-8") as file:
-                            file.write(novo_conteudo)
-                        print(f"Corrigido em: {arquivo}")
-                        corrigidos += 1
+                        with open(file_path, "w", encoding="utf-8") as file:
+                            file.write(new_content)
+                        print(f"Fixed in: {file_path}")
+                        fixed += 1
 
-        if corrigidos == 0:
-            print("Nenhuma ocorrência encontrada para corrigir.")
+        if fixed == 0:
+            print("No occurrences found to fix.")
         else:
-            print(f"Total de arquivos corrigidos: {corrigidos}")
+            print(f"Total files fixed: {fixed}")
 
             
-    def instalar_se_necessario(pacote, nome_pip=None):
+    def install_if_needed(package, pip_name=None):
         
         try:
-            importlib.import_module(pacote)
+            importlib.import_module(package)
         except ImportError:
-            print(f"Instalando o pacote '{nome_pip or pacote}'...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", nome_pip or pacote])
+            print(f"Installing package '{pip_name or package}'...")
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", pip_name or package]
+            )
 
-    # Lista de pacotes a instalar: (nome do import, nome no pip se for diferente)
+    # List of packages to install: (import name, pip name if different)
     
-    bibliotecas = [
+    libraries = [
         ('langgraph',),
         ('ddgs',),
         ('langchain',),
@@ -68,10 +70,10 @@ def instalar_libraries():
         ('pydantic',),
     ]
 
-    for args in bibliotecas:
-        instalar_se_necessario(*args)
+    for args in libraries:
+        install_if_needed(*args)
 
-    corrigir_pandas_ta()
+    fix_pandas_ta()
 
 if __name__ == "__main__":
-    instalar_libraries()
+    install_libraries()

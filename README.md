@@ -11,3 +11,9 @@ Notes:
 - Ollama must be running locally (default: http://localhost:11434).
 - ddgs package provides DDGS class. Some environments still use duckduckgo_search.
 This file supports both imports.
+
+The algorithm considers using the deepseek-r1:8b model (it is possible to change it in the config.py file).
+
+(1) Install Ollama
+(2) Open the terminal in Windows
+(3) Enter the command: ollama pull deepseek-r1:8b
