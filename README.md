@@ -1,4 +1,4 @@
-## Overview
+## Private Agentic AI
 
 This project is a **privacy-first, offline-capable AI system** built on **local large language models**. Its core design philosophy emphasizes **explicit orchestration, transparency, and user data sovereignty**, avoiding any dependency on proprietary cloud-based model providers.
 
