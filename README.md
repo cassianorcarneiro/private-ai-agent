@@ -64,9 +64,15 @@ The processing flow is fixed and executed as follows:
 
 ## Setup
 
-1. Install **Ollama**
-2. Open a terminal (Windows or compatible shell)
-3. Pull a local model, for example:
+1. Install requirements
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Install **Ollama**
+3. Open a terminal (Windows or compatible shell)
+4. Pull a local model, for example:
    
    ```bash
    ollama pull deepseek-r1:8b

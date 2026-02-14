@@ -1,0 +1,5 @@
+langgraph
+ddgs
+langchain
+langchain-ollama
+pydantic
