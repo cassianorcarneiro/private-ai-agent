@@ -7,8 +7,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from typing import Any, Dict, List, TypedDict, Annotated
 from operator import add
 from pydantic import BaseModel, Field, ValidationError
@@ -17,7 +17,6 @@ from langchain_ollama import ChatOllama
 from ddgs import DDGS
 from rich.console import Console
 from rich.panel import Panel
-from rich.markdown import Markdown
 import ollama
 
 from config import Config
@@ -27,10 +26,10 @@ from config import Config
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 class AgentState(TypedDict):
-    
     history: List[Dict[str, str]]  # [{"role":"user|assistant","content":"..."}]
 
     question: str
+    use_web_search: bool
 
     search_queries: List[str]
     search_results: List[Dict[str, Any]]
@@ -52,23 +51,20 @@ class SearchPlan(BaseModel):
 class MultiAgentWebAssistant:
 
     def __init__(self, config: Config):
-
         self.config = config
         self.console = Console()
-        
-        self.history: List[Dict[str, str]] = None  # type: ignore
+        self.history: List[Dict[str, str]] = [] 
 
         self._check_model()
-
-        if self.history is None:
-            self.history = []
+        
+        # Build the graph once during initialization to save processing time
+        self.app = self.build_graph()
 
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
     # Check model
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
     def _check_model(self):
-
         try:
             models_response = ollama.list()
             
@@ -90,17 +86,14 @@ class MultiAgentWebAssistant:
                 self.console.print("❌ [red]No models found in Ollama[/red]")
                 raise Exception("No models available")
             
-            # Find DeepSeek models
-
+            # Find configured models
             selected_model = [
                 model for model in model_details
                 if self.config.ollama_model in model['name'].lower()
             ]
             
             if selected_model:
-
-                # Use the first DeepSeek model found
-
+                # Use the first matched model found
                 selected_model = selected_model[0]
                 self.config.ollama_model = selected_model['name']
                 
@@ -115,13 +108,11 @@ class MultiAgentWebAssistant:
                 ))
 
             else:
-
-                # Use the first available model
-
+                # Use the first available model as fallback
                 selected_model = model_details[0]
                 self.config.ollama_model = selected_model['name']
                 self.console.print(Panel(
-                    f"⚠️ [yellow]Using available model:[/yellow] {self.config.ollama_model}\n"
+                    f"⚠️ [yellow]Using alternative available model:[/yellow] {self.config.ollama_model}\n"
                     f"📊 [cyan]Size:[/cyan] {selected_model['size']/1024/1024/1024:.1f}GB",
                     title="🤖 Alternative Model",
                     border_style="yellow"
@@ -166,7 +157,6 @@ class MultiAgentWebAssistant:
 
     @staticmethod
     def _summarize_sources(results: List[Dict[str, Any]], max_items: int) -> str:
-        
         lines: List[str] = []
         n = 0
         
@@ -188,7 +178,6 @@ class MultiAgentWebAssistant:
         return "\n".join(lines) if lines else "(No useful sources returned.)"
 
     def _history_block(self, max_turns: int = 6) -> str:
-
         recent = self.history[-2 * max_turns :]
         out = []
 
@@ -203,6 +192,12 @@ class MultiAgentWebAssistant:
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
     def node_plan_search(self, state: AgentState) -> Dict[str, Any]:
+        self.console.print("[dim cyan]>> [DEBUG] Entering node_plan_search...[/dim cyan]")
+
+        if not state.get("use_web_search", True):
+            self.console.print("[dim cyan]>> [DEBUG] Search disabled. Skipping planning.[/dim cyan]")
+            return {"search_queries": [], "search_results": [], "drafts": [], "final_answer": ""}
+        
         llm = self._llm(self.config.temperature_planner)
 
         prompt = (
@@ -223,41 +218,44 @@ class MultiAgentWebAssistant:
         except (ValueError, ValidationError):
             queries = [state["question"][:120]]
 
+        self.console.print("[dim cyan]>> [DEBUG] node_plan_search finished.[/dim cyan]")
         return {"search_queries": queries, "search_results": [], "drafts": [], "final_answer": ""}
 
     def node_web_search(self, state: AgentState) -> Dict[str, Any]:
+        self.console.print("[dim cyan]>> [DEBUG] Entering node_web_search...[/dim cyan]")
+
+        if not state.get("use_web_search", True) or not state["search_queries"]:
+            self.console.print("[dim cyan]>> [DEBUG] Skipping web search (DuckDuckGo).[/dim cyan]")
+            return {"search_results": []}
         
         out: List[Dict[str, Any]] = []
 
-        try:
-            with DDGS() as ddgs:
-                for q in state["search_queries"]:
-                    try:
-                        for r in ddgs.text(q, max_results=self.config.ddgs_max_results_per_query):
-                            if isinstance(r, dict):
-                                out.append({"query": q, **r})
-                            else:
-                                out.append({"query": q, "raw": r})
-                    except Exception as e:
-                        out.append({"query": q, "error": str(e)})
-        except Exception:
-            ddgs = DDGS()
-            for q in state["search_queries"]:
-                try:
-                    for r in ddgs.text(q, max_results=self.config.ddgs_max_results_per_query):
+        # Simplified and cleaner DuckDuckGo search logic
+        for q in state["search_queries"]:
+            try:
+                with DDGS() as ddgs:
+                    results = ddgs.text(q, max_results=self.config.ddgs_max_results_per_query)
+                    for r in results:
                         if isinstance(r, dict):
                             out.append({"query": q, **r})
                         else:
                             out.append({"query": q, "raw": r})
-                except Exception as e:
-                    out.append({"query": q, "error": str(e)})
+            except Exception as e:
+                out.append({"query": q, "error": str(e)})
 
+        self.console.print("[dim cyan]>> [DEBUG] node_web_search finished.[/dim cyan]")
         return {"search_results": out}
 
     def node_answer(self, name: str, focus: str):
         def _node(state: AgentState) -> Dict[str, Any]:
+            self.console.print(f"[dim cyan]>> [DEBUG] Entering agent: {name}...[/dim cyan]")
+
             llm = self._llm(self.config.temperature_drafters)
-            sources = self._summarize_sources(state["search_results"], self.config.max_sources_in_prompt)
+            
+            if not state.get("use_web_search", True):
+                sources = "(Web search is disabled for this question. Use only your internal knowledge.)"
+            else:
+                sources = self._summarize_sources(state["search_results"], self.config.max_sources_in_prompt)
 
             prompt = (
                 f"You are {name}.\nFocus: {focus}\n\n"
@@ -268,10 +266,15 @@ class MultiAgentWebAssistant:
             )
 
             draft = llm.invoke(prompt).content.strip()
+            
+            self.console.print(f"[dim cyan]>> [DEBUG] Agent {name} finished.[/dim cyan]")
+
             return {"drafts": [f"[{name}]\n{draft}"]}
         return _node
 
     def node_aggregate(self, state: AgentState) -> Dict[str, Any]:
+        self.console.print("[dim cyan]>> [DEBUG] Entering node_aggregate (Final Answer)...[/dim cyan]")
+
         llm = self._llm(self.config.temperature_aggregator)
         sources = self._summarize_sources(state["search_results"], self.config.max_sources_in_prompt)
         drafts = "\n\n".join(state["drafts"])
@@ -283,10 +286,13 @@ class MultiAgentWebAssistant:
             f"User question:\n{state['question']}\n\n"
             f"Sources:\n{sources}\n\n"
             f"Drafts:\n{drafts}\n\n"
-            "Final answer:\n"
+            "\n"
         )
 
         final = llm.invoke(prompt).content.strip()
+
+        self.console.print("[dim cyan]>> [DEBUG] node_aggregate finished.[/dim cyan]")
+
         return {"final_answer": final}
 
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
@@ -320,80 +326,72 @@ class MultiAgentWebAssistant:
 
         return g.compile()
 
-    def chat_loop_ollama(model: str):
-        messages = [
-            {"role": "system", "content": "Responda em pt-BR. Seja objetivo."}
-        ]
-
-        while True:
-            user_input = input("Você: ").strip()
-            if user_input.lower() in {"sair", "exit", "quit"}:
-                break
-            if not user_input:
-                continue
-
-            messages.append({"role": "user", "content": user_input})
-
-            res = ollama.chat(model=model, messages=messages)
-            content = (res.message.content or "").strip() or (getattr(res.message, "thinking", "") or "").strip()
-
-            messages.append({"role": "assistant", "content": content})
-            print("\nAgente:", content, "\n")
-
-    def ask(self, question: str) -> str:
-        app = self.build_graph()
-
+    def ask(self, question: str, use_web_search: bool = True) -> str:
         init_state: AgentState = {
             "history": self.history,
             "question": question,
+            "use_web_search": use_web_search,
             "search_queries": [],
             "search_results": [],
             "drafts": [],
             "final_answer": "",
         }
 
-        out = app.invoke(init_state)
+        # Use the app initialized in __init__ instead of rebuilding every time
+        out = self.app.invoke(init_state)
         answer = out["final_answer"]
 
-        # Atualiza memória da sessão (fora do grafo)
+        # Update session memory (outside the graph)
         self.history.append({"role": "user", "content": question})
         self.history.append({"role": "assistant", "content": answer})
 
         return answer
         
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# Graph build + run
+# Main Application Loop
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 def main():
-
     config = Config()
-
     assistant = MultiAgentWebAssistant(config=config)
 
-    assistant.console.print(Panel('Type "exit" to close.',
-            title="",
-            border_style="white"
-        ))
+    assistant.console.print(Panel(
+        'Type "exit" to close.\nType "/search off" or "/search on" to toggle web search.',
+        title="🤖 Commands",
+        border_style="white"
+    ))
+
+    use_search = True
 
     while True:
-        
-        print('\n')
+        assistant.console.print()
         q = input("User question: ").strip()
-        print('\n')
+        assistant.console.print()
 
         if not q:
             continue
-        if q.lower() in {"sair", "exit", "quit"}:
+        if q.lower() in {"exit", "quit"}:
             break
+            
+        # --- TOGGLE LOGIC ---
+        if q.lower() == "/search off":
+            use_search = False
+            assistant.console.print("🔴 [red]Web search disabled.[/red]")
+            continue
+        if q.lower() == "/search on":
+            use_search = True
+            assistant.console.print("🟢 [green]Web search enabled.[/green]")
+            continue
         
-        a = assistant.ask(q)
+        # --- PASSING FLAG TO ASK ---
+        a = assistant.ask(q, use_web_search=use_search)
         
+        assistant.console.print()
         assistant.console.print(Panel(a,
-            title="🤖 Response",
-            border_style="blue"
-        ))
+                                      title="🤖 Response",
+                                      border_style="blue"))
 
 if __name__ == "__main__":
-    os.system('cls')
+    # Ensure clear screen works on both Windows and Unix-based systems
+    os.system('cls' if os.name == 'nt' else 'clear')
     main()
