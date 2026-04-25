@@ -121,7 +121,7 @@ Larger models (14B–70B) produce noticeably better aggregated answers if your h
 - [ ] Tool-use support (calculator, code execution, file reading)
 
 ---
-### 📝 AI Assistance Disclosure
+### AI Assistance Disclosure
 The codebase architecture, organizational structure, and stylistic formatting of this repository were refactored and optimized leveraging [Claude](https://www.anthropic.com/claude) by Anthropic. All core business logic and intellectual property remain the work of the repository authors and are governed by the project's license.
 
 ---
