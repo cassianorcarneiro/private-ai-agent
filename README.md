@@ -1,82 +1,125 @@
-## Private Agentic AI
+# Private AI Agent
 
-This project is a **privacy-first, offline-capable AI system** built on **local large language models**. Its core design philosophy emphasizes **explicit orchestration, transparency, and user data sovereignty**, avoiding any dependency on proprietary cloud-based model providers.
+A privacy-first, offline-capable AI assistant built on local language models. It orchestrates multiple specialized agents and optional web retrieval to deliver high-quality, well-grounded responses — without sharing your data with proprietary model providers.
 
-Unlike end-to-end monolithic chatbots that rely on implicit, internal task decomposition, this system adopts a **predefined multi-agent pipeline**. Each stage of reasoning is handled by a **specialized agent with a fixed role**, enabling predictable behavior, auditability, and fine-grained control over the reasoning process.
+## Why this project
 
----
+Most modern AI assistants ship your prompts, context, and conversation history to third-party APIs. This project takes the opposite approach:
 
-## Architectural Approach
+- **Local-first** — all reasoning happens on your machine via [Ollama](https://ollama.com).
+- **Multi-agent by design** — three specialist agents draft answers in parallel, and a fourth aggregates them. This produces more balanced and complete responses than a single pass.
+- **Optional web retrieval** — DuckDuckGo search can be toggled on or off per question. When off, the assistant uses only the model's internal knowledge.
+- **Transparent state** — built on [LangGraph](https://github.com/langchain-ai/langgraph), every step (planning, searching, drafting, aggregating) is an explicit node you can inspect or modify.
 
-The system follows a **static, role-based multi-agent architecture**, where the reasoning workflow is explicitly engineered rather than dynamically inferred at runtime. This design choice prioritizes:
+## How it works
 
-- Deterministic execution
-- Interpretability of each reasoning step
-- Easier debugging and extension
-- Suitability for private, regulated, or offline environments
-
-While modern large chatbots often rely on *implicit latent planning*, this project deliberately externalizes the reasoning structure as an explicit computational graph.
-
----
-
-## Pipeline
-
-The processing flow is fixed and executed as follows:
-
-1. **Planner Agent**  
-   Analyzes the user prompt and formulates search queries when external information is required.
-
-2. **Web Search (Optional)**  
-   Queries DuckDuckGo using the DDGS interface for retrieval-augmented generation.
-
-3. **Responder Agents (Parallel)**  
-   Three independent responder agents generate candidate answers in parallel, increasing diversity and robustness.
-
-4. **Aggregator Agent**  
-   Synthesizes the responder outputs into a single coherent and high-quality final response.
-
----
-
-## Key Characteristics
-
-- Fully local inference (no data leaves the machine)
-- Explicit agent roles and execution order
-- Optional web retrieval, cleanly separated from reasoning
-- Modular design, allowing agent replacement or extension
-- Compatible with constrained or offline deployments
-
----
-
-## Requirements & Notes
-
-- **Ollama** must be running locally  
-  Default endpoint: `http://localhost:11434`
-
-- The project supports both:
-  - `ddgs` (preferred, provides the `DDGS` class)
-  - `duckduckgo_search` (legacy compatibility)
-
-- The default model is:
-  - `mixtral:8x7b`  
-  This can be changed in the `config.py` file.
-
----
-
-## Setup
-
-1. Install requirements
-
-```bash
-pip install -r requirements.txt
+```
+                ┌──> Agent-1 (clear structured explanation) ──┐
+plan_search ──> web_search ──> Agent-2 (caveats, counterpoints) ──┼──> aggregate ──> END
+                └──> Agent-3 (practical steps, examples)  ───┘
 ```
 
-2. Install **Ollama**
-3. Open a terminal (Windows or compatible shell)
-4. Pull a local model, for example:
-   
-   ```bash
-   ollama pull deepseek-r1:8b
+| Stage | Role |
+|-------|------|
+| **Planner** | Generates 3–6 targeted web search queries from the user question and recent context |
+| **Web Search** | Fetches results via DuckDuckGo (skipped when `/search off`) |
+| **Agent-1** | Drafts a clear, structured explanation |
+| **Agent-2** | Drafts limitations, caveats, and counterpoints |
+| **Agent-3** | Drafts practical steps, recommendations, and examples |
+| **Aggregator** | Merges the three drafts into one final answer, marking uncertainty where appropriate |
 
-## Design Rationale
+The fan-out / fan-in pattern is implemented with LangGraph's `Annotated[List[str], add]` reducer, so the three drafters run independently and their outputs are concatenated automatically.
 
-This project intentionally contrasts with dynamically orchestrated LLM systems by embracing explicit engineering over emergent behavior. The result is a system that trades some flexibility for control, safety, and clarity, making it well-suited for private assistants, research, and on-premises AI applications.
+## Installation
+
+**Requirements:** Python 3.10+ and a running Ollama instance.
+
+```bash
+# 1. Install Ollama: https://ollama.com/download
+# 2. Pull a model
+ollama pull deepseek-coder        # or llama3.1, qwen2.5, mistral, etc.
+ollama serve
+
+# 3. Install Python dependencies
+pip install langgraph langchain-ollama ollama ddgs rich pydantic
+```
+
+## Usage
+
+```bash
+python agent.py
+```
+
+Then interact with the assistant:
+
+```
+User question: What are the trade-offs of using local LLMs vs cloud APIs?
+```
+
+### Commands
+
+| Command | Effect |
+|---------|--------|
+| `/search on` | Enable DuckDuckGo web retrieval (default) |
+| `/search off` | Disable web retrieval — model uses only internal knowledge |
+| `exit` or `quit` | Leave the assistant |
+
+### Session memory
+
+The assistant maintains a rolling conversation history (last 6 turns by default), so follow-up questions remain in context within a session. History is held in memory only and is discarded when the program exits — nothing is written to disk.
+
+## Configuration
+
+Edit `config.py` to tune behavior:
+
+| Field | Purpose | Default |
+|-------|---------|---------|
+| `ollama_model` | Which local model to use (substring match) | `deepseek-coder` |
+| `ollama_base_url` | Ollama server URL | `http://localhost:11434` |
+| `temperature_planner` | Determinism of the search planner | `0.0` |
+| `temperature_drafters` | Creativity of the three specialists | `0.3` |
+| `temperature_aggregator` | Determinism of the final merge | `0.1` |
+| `max_queries` | Cap on web search queries per question | `6` |
+| `ddgs_max_results_per_query` | Results fetched per query | `5` |
+| `max_sources_in_prompt` | Sources included in drafter prompts | `8` |
+
+## Privacy model
+
+- Prompts and conversation history **never** leave your machine when web search is off.
+- When web search is on, only the **search queries** generated by the planner are sent to DuckDuckGo — never the full conversation or original question verbatim (unless the planner falls back to using the question as a query).
+- No telemetry, no analytics, no API keys required.
+- The Ollama instance runs locally; you control which models are pulled and used.
+
+## Project structure
+
+```
+private-ai-agent/
+├── agent.py        # MultiAgentWebAssistant class, graph nodes, REPL loop
+├── config.py       # Config dataclass with model and behavior settings
+└── README.md
+```
+
+## Recommended models
+
+For general-purpose Q&A:
+- `llama3.1:8b` — strong all-rounder
+- `qwen2.5:7b` — excellent reasoning, multilingual
+- `mistral:7b` — fast and capable
+
+For technical / coding questions:
+- `deepseek-coder` — code-focused, very capable
+- `qwen2.5-coder` — strong on code and explanation
+
+Larger models (14B–70B) produce noticeably better aggregated answers if your hardware can run them.
+
+## Roadmap
+
+- [ ] Persistent conversation history (opt-in)
+- [ ] Configurable agent personas via YAML
+- [ ] Pluggable search backends (SearXNG, Brave, etc.)
+- [ ] Streaming responses
+- [ ] Tool-use support (calculator, code execution, file reading)
+
+---
+
+> Built on the principle that useful AI shouldn't require giving up your data.
