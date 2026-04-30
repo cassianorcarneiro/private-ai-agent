@@ -1,5 +1,5 @@
-langgraph
+langgraph>=0.2.0
 ddgs
-langchain
-langchain-ollama
-pydantic
+pydantic>=2.0
+ollama>=0.4.0
+rich
