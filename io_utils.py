@@ -1,6 +1,6 @@
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# Utilitários de I/O: ranking de fontes por domínio confiável.
-# Mantido fora do agent.py para ser testável isoladamente.
+# I/O Utilities: source ranking by trusted domain.
+# Kept outside of agent.py to be testable in isolation.
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 
 
 def domain_of(url: str) -> str:
-    """Extrai o domínio efetivo de uma URL, sem dependências externas."""
+    """Extracts the effective domain from a URL, without external dependencies."""
     if not url:
         return ""
     m = re.match(r"^https?://([^/]+)", url)
@@ -28,8 +28,8 @@ def rank_sources(
     max_items: int,
 ) -> List[Dict[str, Any]]:
     """
-    Reordena resultados: fontes confiáveis (substring match em domínio) vêm
-    primeiro. Mantém ordem relativa dentro de cada bucket.
+    Reorders results: trusted sources (substring match in domain) come
+    first. Maintains relative order within each bucket.
     """
     preferred_lower = [d.lower() for d in preferred_domains]
 
@@ -55,14 +55,14 @@ def filter_sources_by_intent(
     sources: List[Dict[str, Any]],
     intents_allowed: List[str],
 ) -> List[Dict[str, Any]]:
-    """Filtra fontes pelo intent anotado quando a query foi rodada."""
+    """Filters sources by the intent annotated when the query was run."""
     if not intents_allowed:
         return sources
     return [s for s in sources if s.get("intent") in intents_allowed]
 
 
 def summarize_sources(sources: List[Dict[str, Any]], max_items: int) -> str:
-    """Formata fontes em texto compacto para entrar nos prompts."""
+    """Formats sources into compact text to be included in prompts."""
     lines: List[str] = []
     for item in sources[:max_items]:
         if item.get("error"):
@@ -73,4 +73,4 @@ def summarize_sources(sources: List[Dict[str, Any]], max_items: int) -> str:
         if not (title or url or body):
             continue
         lines.append(f"- {title}\n  {url}\n  {body[:400]}")
-    return "\n".join(lines) if lines else "(Nenhuma fonte útil retornada.)"
+    return "\n".join(lines) if lines else "(No useful sources returned.)"

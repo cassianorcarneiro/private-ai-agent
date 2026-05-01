@@ -1,5 +1,5 @@
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# Schemas Pydantic para os outputs estruturados dos agentes.
+# Pydantic schemas for the agents' structured outputs.
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 from __future__ import annotations
@@ -14,10 +14,10 @@ class SearchQueryItem(BaseModel):
     query: str
     intent: Literal["factual", "context", "examples", "counterpoint"] = "factual"
     """
-    factual:      busca de fatos/definições/dados (boa para o explanation drafter)
-    context:      contexto, histórico, comparações
-    examples:     exemplos práticos, casos de uso, tutoriais (drafter examples)
-    counterpoint: críticas, limitações, debates abertos (drafter caveats)
+    factual:      search for facts/definitions/data (good for the explanation drafter)
+    context:      context, history, comparisons
+    examples:     practical examples, use cases, tutorials (examples drafter)
+    counterpoint: criticisms, limitations, open debates (caveats drafter)
     """
 
 
@@ -28,14 +28,14 @@ class SearchPlan(BaseModel):
 # ---------- Drafter output -----------------------------------------------------------------------
 
 class DrafterOutput(BaseModel):
-    """Estrutura comum a todos os drafters. Permite ao aggregator processar
-    de forma uniforme em vez de receber 3 strings opacas."""
+    """Common structure for all drafters. Allows the aggregator to process 
+    them uniformly instead of receiving 3 opaque strings."""
     role: Literal["explanation", "caveats", "examples"]
-    summary: str = Field(..., description="1-2 frases resumindo o ponto central")
-    key_points: List[str] = Field(default_factory=list, description="Bullets principais")
-    body_markdown: str = Field(..., description="Conteúdo expandido em markdown")
+    summary: str = Field(..., description="1-2 sentences summarizing the central point")
+    key_points: List[str] = Field(default_factory=list, description="Main bullet points")
+    body_markdown: str = Field(..., description="Expanded content in markdown")
     confidence: Literal["high", "medium", "low"] = "medium"
-    sources_used: List[str] = Field(default_factory=list, description="URLs efetivamente úteis para esta resposta")
+    sources_used: List[str] = Field(default_factory=list, description="URLs that were actually useful for this response")
 
 
 # ---------- Final answer -------------------------------------------------------------------------
@@ -43,4 +43,4 @@ class DrafterOutput(BaseModel):
 class FinalAnswer(BaseModel):
     answer_markdown: str
     confidence_level: Literal["high", "medium", "low"] = "medium"
-    open_questions: List[str] = Field(default_factory=list, description="Pontos onde dados disponíveis não bastam")
+    open_questions: List[str] = Field(default_factory=list, description="Points where available data is insufficient")

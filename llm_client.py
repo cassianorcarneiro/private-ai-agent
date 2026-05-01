@@ -1,8 +1,8 @@
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# Cliente LLM unificado.
-# - Uma única API baseada em ollama.chat nativo.
-# - JSON estruturado com format=json + retry com erro de validação Pydantic.
-# - Sanitização básica de saída JSON (LLMs vazam markdown fences).
+# UNIFIED LLM CLIENT
+# - Single API based on native ollama.chat.
+# - Structured JSON using format=json + retry on Pydantic validation error.
+# - Basic JSON output sanitization (LLMs often leak markdown fences).
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ class LLMClient:
 
     @staticmethod
     def _safe_json_extract(text: str) -> dict:
-        """Tolera markdown fences e prefixos vazados do modelo."""
+        """Tolerates markdown fences and model-leaked prefixes."""
         text = text.strip()
         if text.startswith("```"):
             text = text.strip("`")
@@ -54,7 +54,7 @@ class LLMClient:
         temperature: float,
         model: Optional[str] = None,
     ) -> str:
-        """Chamada simples; retorna o conteúdo de texto da resposta."""
+        """Simple call; returns the text content of the response."""
         resp = self._client.chat(
             model=model or self.default_model,
             messages=[{"role": "user", "content": prompt}],
@@ -70,8 +70,8 @@ class LLMClient:
         model: Optional[str] = None,
     ) -> T:
         """
-        Chama o modelo pedindo JSON, valida com Pydantic, e tenta novamente
-        em caso de falha — incluindo o erro na próxima mensagem.
+        Calls the model requesting JSON, validates with Pydantic, and retries 
+        in case of failure — including the error details in the next message.
         """
         last_error: Optional[str] = None
         last_raw: Optional[str] = None
@@ -81,10 +81,10 @@ class LLMClient:
             if last_error and last_raw:
                 full_prompt = (
                     prompt
-                    + "\n\n---\nTentativa anterior falhou validação:\n"
-                    + f"OUTPUT_INVÁLIDO:\n{last_raw[:1500]}\n"
-                    + f"ERRO:\n{last_error[:800]}\n"
-                    + "Responda APENAS o JSON válido conforme o schema, sem markdown nem comentários."
+                    + "\n\n---\nPrevious attempt failed validation:\n"
+                    + f"INVALID_OUTPUT:\n{last_raw[:1500]}\n"
+                    + f"ERROR:\n{last_error[:800]}\n"
+                    + "Respond ONLY with valid JSON matching the schema, without markdown or comments."
                 )
 
             try:
@@ -102,7 +102,7 @@ class LLMClient:
                 last_error = str(e)
                 if attempt >= self.json_max_retries:
                     raise StructuredOutputError(
-                        f"Falha ao obter JSON válido para {schema.__name__} "
-                        f"após {self.json_max_retries + 1} tentativas. "
-                        f"Último erro: {last_error}"
+                        f"Failed to obtain valid JSON for {schema.__name__} "
+                        f"after {self.json_max_retries + 1} attempts. "
+                        f"Last error: {last_error}"
                     ) from e

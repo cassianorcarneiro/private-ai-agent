@@ -1,15 +1,16 @@
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# PRIVATE AI AGENT — V2
+# PRIVATE AI AGENT
+# REPOSITORY: https://github.com/cassianorcarneiro/private-multi-agent
 # CASSIANO RIBEIRO CARNEIRO
 #
 # Pipeline:
 #   plan_search ─> web_search ─┬─> explanation ─┐
-#                              ├─> caveats ─────┼─> aggregate ─> END
-#                              └─> examples ────┘
+#                               ├─> caveats ─────┼─> aggregate ─> END
+#                               └─> examples ────┘
 #
-# Cada drafter recebe um SUBSET de fontes filtradas por intent compatível
-# com seu papel, e produz JSON validado por Pydantic. O aggregator consome
-# os três outputs estruturados.
+# Each drafter receives a SUBSET of filtered sources by intent compatible
+# with its role, and produces Pydantic-validated JSON. The aggregator consumes
+# the three structured outputs.
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ class AgentState(TypedDict, total=False):
     search_plan: SearchPlan
     search_results: List[Dict[str, Any]]
 
-    # Reducer 'add' concatena listas dos drafters em paralelo
+    # Reducer 'add' concatenates lists from parallel drafters
     drafter_outputs: Annotated[List[DrafterOutput], add]
 
     final: FinalAnswer
@@ -74,7 +75,7 @@ def load_prompts(prompts_dir: str) -> Dict[str, str]:
         p = base / fname
         if not p.exists():
             raise FileNotFoundError(
-                f"Prompt '{fname}' não encontrado em {base.resolve()}."
+                f"Prompt '{fname}' not found in {base.resolve()}."
             )
         out[name] = p.read_text(encoding="utf-8").strip()
     return out
@@ -92,22 +93,22 @@ class MultiAgentAssistant:
         self.console = Console()
         self.history: List[Dict[str, str]] = []
 
-        self.console.print("[dim]→ Carregando prompts...[/dim]")
+        self.console.print("[dim]→ Loading prompts...[/dim]")
         self.prompts = load_prompts(self.config.prompts_dir)
 
-        self.console.print("[dim]→ Verificando modelos no Ollama...[/dim]")
+        self.console.print("[dim]→ Checking models in Ollama...[/dim]")
         self._check_model()
 
-        self.console.print("[dim]→ Inicializando cliente LLM...[/dim]")
+        self.console.print("[dim]→ Initializing LLM client...[/dim]")
         self.llm = LLMClient(
             base_url=self.config.ollama_base_url,
             default_model=self.config.ollama_model,
             json_max_retries=self.config.json_max_retries,
         )
 
-        self.console.print("[dim]→ Construindo grafo de agentes...[/dim]")
+        self.console.print("[dim]→ Building agent graph...[/dim]")
         self.app = self.build_graph()
-        self.console.print("[green]✓ Pronto.[/green]\n")
+        self.console.print("[green]✓ Ready.[/green]\n")
 
     # ---- Model resolution ----------------------------------------------------------------------
 
@@ -123,13 +124,13 @@ class MultiAgentAssistant:
                         "parameters": getattr(model.details, "parameter_size", "N/A") if model.details else "N/A",
                     })
             if not model_details:
-                self.console.print("❌ [red]Nenhum modelo encontrado no Ollama.[/red]")
-                self.console.print("   Instale um, p.ex.: [cyan]ollama pull llama3.1:8b[/cyan]")
+                self.console.print("❌ [red]No models found in Ollama.[/red]")
+                self.console.print("   Install one, e.g.: [cyan]ollama pull llama3.1:8b[/cyan]")
                 raise RuntimeError("No models available")
 
-            self.config.ollama_model = self._resolve_model(self.config.ollama_model, model_details, "padrão")
+            self.config.ollama_model = self._resolve_model(self.config.ollama_model, model_details, "default")
 
-            # Resolve overrides opcionais
+            # Resolve optional overrides
             for attr, label in [
                 ("ollama_model_drafter_explanation", "drafter:explanation"),
                 ("ollama_model_drafter_caveats", "drafter:caveats"),
@@ -141,21 +142,21 @@ class MultiAgentAssistant:
                     setattr(self.config, attr, self._resolve_model(requested, model_details, label))
 
         except Exception as e:
-            # Re-raise como RuntimeError com mensagem amigável; main() trata.
+            # Re-raise as RuntimeError with a friendly message; main() handles it.
             raise RuntimeError(
-                f"Não consegui conectar ao Ollama em {self.config.ollama_base_url}.\n"
-                f"   Erro original: {e}\n\n"
-                "🔧 Possíveis soluções:\n"
-                "   1. Verifique se o Ollama está rodando:  ollama serve\n"
-                "   2. Instale um modelo:                   ollama pull llama3.1:8b\n"
-                "   3. Confirme a URL em config.ollama_base_url"
+                f"Could not connect to Ollama at {self.config.ollama_base_url}.\n"
+                f"   Original error: {e}\n\n"
+                "🔧 Possible solutions:\n"
+                "   1. Check if Ollama is running:  ollama serve\n"
+                "   2. Install a model:             ollama pull llama3.1:8b\n"
+                "   3. Verify URL in config.ollama_base_url"
             ) from e
 
     def _resolve_model(self, requested: str, model_details: list, label: str) -> str:
-        """Match exato → prefix → substring → fallback. Determinístico."""
+        """Exact match → prefix → substring → fallback. Deterministic."""
         req_low = requested.lower()
 
-        # 1. exato
+        # 1. exact
         match = [m for m in model_details if m["name"].lower() == req_low]
         if match:
             self._log_model(label, match[0], exact_match=True)
@@ -174,21 +175,21 @@ class MultiAgentAssistant:
         # fallback
         chosen = model_details[0]
         self.console.print(Panel(
-            f"⚠️  [yellow]'{requested}' não encontrado.[/yellow]\n"
-            f"Usando fallback: [bold]{chosen['name']}[/bold]",
-            title=f"🤖 Modelo ({label}) — fallback",
+            f"⚠️  [yellow]'{requested}' not found.[/yellow]\n"
+            f"Using fallback: [bold]{chosen['name']}[/bold]",
+            title=f"🤖 Model ({label}) — fallback",
             border_style="yellow",
         ))
         return chosen["name"]
 
     def _log_model(self, label: str, chosen: dict, exact_match: bool):
         size_gb = (chosen["size"] or 0) / 1024 / 1024 / 1024
-        suffix = "" if exact_match else " [dim](match não exato)[/dim]"
+        suffix = "" if exact_match else " [dim](inexact match)[/dim]"
         self.console.print(Panel(
-            f"✅ [green]Modelo de {label}:[/green] {chosen['name']}{suffix}\n"
-            f"📊 [cyan]Tamanho:[/cyan] {size_gb:.1f} GB\n"
-            f"⚙️  [yellow]Parâmetros:[/yellow] {chosen['parameters']}",
-            title=f"🤖 Modelo ({label})",
+            f"✅ [green]Model for {label}:[/green] {chosen['name']}{suffix}\n"
+            f"📊 [cyan]Size:[/cyan] {size_gb:.1f} GB\n"
+            f"⚙️  [yellow]Parameters:[/yellow] {chosen['parameters']}",
+            title=f"🤖 Model ({label})",
             border_style="green",
         ))
 
@@ -197,7 +198,7 @@ class MultiAgentAssistant:
     def _history_block(self) -> str:
         recent = self.history[-2 * self.config.history_max_turns :]
         out = [f"{m['role'].upper()}: {m['content']}" for m in recent]
-        return "\n".join(out) if out else "(sem contexto prévio)"
+        return "\n".join(out) if out else "(no previous context)"
 
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
     # Nodes
@@ -211,8 +212,8 @@ class MultiAgentAssistant:
 
         prompt = (
             self.prompts["planner"]
-            + f"\n\n[HISTÓRICO RECENTE]:\n{self._history_block()}"
-            + f"\n\n[PERGUNTA]:\n{state['question']}"
+            + f"\n\n[RECENT HISTORY]:\n{self._history_block()}"
+            + f"\n\n[QUESTION]:\n{state['question']}"
         )
         try:
             plan = self.llm.chat_structured(
@@ -261,7 +262,7 @@ class MultiAgentAssistant:
         temperature: float,
         model_attr: str,
     ):
-        """Factory que cria um node drafter com filtragem de fontes por intent."""
+        """Factory that creates a drafter node with intent-based source filtering."""
         def _node(state: AgentState) -> Dict[str, Any]:
             self.console.print(f"[dim cyan]>> [3/3] Drafter:{role}...[/dim cyan]")
 
@@ -272,14 +273,14 @@ class MultiAgentAssistant:
             sources_text = (
                 summarize_sources(relevant_sources, self.config.max_sources_in_prompt)
                 if state.get("use_web_search") and relevant_sources
-                else "(busca web desativada ou sem fontes relevantes para este papel)"
+                else "(web search disabled or no relevant sources for this role)"
             )
 
             prompt = (
                 self.prompts[prompt_key]
-                + f"\n\n[HISTÓRICO RECENTE]:\n{self._history_block()}"
-                + f"\n\n[PERGUNTA]:\n{state['question']}"
-                + f"\n\n[FONTES (intents permitidos: {', '.join(intents_allowed)})]:\n{sources_text}"
+                + f"\n\n[RECENT HISTORY]:\n{self._history_block()}"
+                + f"\n\n[QUESTION]:\n{state['question']}"
+                + f"\n\n[SOURCES (allowed intents: {', '.join(intents_allowed)})]:\n{sources_text}"
             )
 
             model = getattr(self.config, model_attr) or self.config.ollama_model
@@ -291,12 +292,12 @@ class MultiAgentAssistant:
                     model=model,
                 )
             except StructuredOutputError as e:
-                # Fallback degradado: cria um output mínimo para não quebrar o aggregator
+                # Degraded fallback: create minimal output so aggregator doesn't break
                 output = DrafterOutput(
                     role=role,
-                    summary=f"(falha na geração estruturada do drafter {role})",
+                    summary=f"(failed to generate structured output for drafter {role})",
                     key_points=[],
-                    body_markdown=f"*Drafter {role} falhou: {e}*",
+                    body_markdown=f"*Drafter {role} failed: {e}*",
                     confidence="low",
                 )
             return {"drafter_outputs": [output]}
@@ -313,9 +314,9 @@ class MultiAgentAssistant:
 
         prompt = (
             self.prompts["aggregator"]
-            + f"\n\n[HISTÓRICO RECENTE]:\n{self._history_block()}"
-            + f"\n\n[PERGUNTA]:\n{state['question']}"
-            + f"\n\n[DRAFTS ESTRUTURADOS]:\n{drafts_json}"
+            + f"\n\n[RECENT HISTORY]:\n{self._history_block()}"
+            + f"\n\n[QUESTION]:\n{state['question']}"
+            + f"\n\n[STRUCTURED DRAFTS]:\n{drafts_json}"
         )
 
         model = self.config.ollama_model_aggregator or self.config.ollama_model
@@ -327,7 +328,7 @@ class MultiAgentAssistant:
                 model=model,
             )
         except StructuredOutputError as e:
-            # Fallback: monta resposta a partir dos drafts em modo determinístico
+            # Fallback: assemble response from drafts in deterministic mode
             final = self._fallback_aggregate(drafts, error=str(e))
         return {"final": final}
 
@@ -335,8 +336,8 @@ class MultiAgentAssistant:
         parts: List[str] = []
         for d in drafts:
             parts.append(f"## {d.role.title()}\n\n{d.body_markdown}")
-        parts.append(f"\n*Nota: o agregador automático falhou ({error[:120]}); "
-                     "esta resposta foi montada a partir dos drafts.*")
+        parts.append(f"\n*Note: the automatic aggregator failed ({error[:120]}); "
+                     "this response was assembled from individual drafts.*")
         confidences = [d.confidence for d in drafts]
         if all(c == "high" for c in confidences):
             level = "high"
@@ -360,9 +361,9 @@ class MultiAgentAssistant:
         g.add_node("plan_search", self.node_plan_search)
         g.add_node("web_search", self.node_web_search)
 
-        # Cada drafter recebe um SUBSET diferente de fontes (filtrado por intent).
-        # Essa é a diferença real em relação à v1: não são "três modelos olhando
-        # para a mesma sopa" — cada um foca em fontes do seu tipo.
+        # Each drafter receives a different SUBSET of sources (filtered by intent).
+        # This is the real difference compared to v1: it's not "three models looking
+        # at the same soup" — each one focuses on sources relevant to its role.
         g.add_node("drafter_explanation", self._node_drafter(
             role="explanation",
             prompt_key="explanation",
@@ -413,13 +414,13 @@ class MultiAgentAssistant:
         try:
             out = self.app.invoke(init_state)
         except Exception as e:
-            self.console.print(f"[bold red]Erro inesperado no pipeline: {e}[/bold red]")
+            self.console.print(f"[bold red]Unexpected error in pipeline: {e}[/bold red]")
             return FinalAnswer(
                 answer_markdown=(
-                    f"## ⚠️ Erro técnico\n\n"
-                    f"Ocorreu um erro processando sua pergunta: `{e}`\n\n"
-                    "O histórico foi preservado. Tente reformular ou verifique se o Ollama "
-                    "continua rodando."
+                    f"## ⚠️ Technical Error\n\n"
+                    f"An error occurred while processing your question: `{e}`\n\n"
+                    "The history has been preserved. Try rephrasing or check if Ollama "
+                    "is still running."
                 ),
                 confidence_level="low",
                 open_questions=[],
@@ -429,7 +430,7 @@ class MultiAgentAssistant:
 
         self.history.append({"role": "user", "content": question})
         self.history.append({"role": "assistant", "content": final.answer_markdown})
-        # Trim duro pra evitar crescimento indefinido
+        # Strict trim to prevent indefinite growth
         max_items = self.config.history_max_turns * 4
         if len(self.history) > max_items:
             self.history = self.history[-max_items:]
@@ -438,47 +439,47 @@ class MultiAgentAssistant:
 
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
-# REPL
+# REPL (Read-Eval-Print Loop)
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++#
 
 def main():
     console = Console()
 
-    # Log explícito de início — se você não vir essa linha, é problema de terminal/encoding
-    console.print("[bold]🤖 Iniciando Private Multi-Agent...[/bold]")
+    # Explicit start log — if you don't see this line, it's a terminal/encoding issue
+    console.print("[bold]🤖 Starting Private Multi-Agent...[/bold]")
 
-    # 1) Verifica que os prompts existem ANTES de tentar conectar ao Ollama
+    # 1) Verify that prompts exist BEFORE trying to connect to Ollama
     try:
         config = Config()
     except Exception as e:
-        console.print(f"[bold red]Erro ao criar Config: {e}[/bold red]")
+        console.print(f"[bold red]Error creating Config: {e}[/bold red]")
         return
 
-    # 2) Tenta inicializar — captura QUALQUER falha e mostra ela (não falha silenciosa)
+    # 2) Attempt initialization — capture ANY failure and display it (no silent failure)
     try:
         assistant = MultiAgentAssistant(config=config)
     except FileNotFoundError as e:
-        console.print(f"\n[bold red]❌ Arquivo de prompt ausente:[/bold red]\n   {e}")
+        console.print(f"\n[bold red]❌ Prompt file missing:[/bold red]\n   {e}")
         console.print(
-            "\n[yellow]Os prompts ficam em ./prompts/ ao lado do agent.py.[/yellow]\n"
-            "Verifique se a pasta foi copiada junto com os .py."
+            "\n[yellow]Prompts should be in ./prompts/ next to agent.py.[/yellow]\n"
+            "Ensure the folder was copied along with the .py files."
         )
         return
     except RuntimeError as e:
         console.print(f"\n[bold red]❌ {e}[/bold red]")
         return
     except Exception as e:
-        # Última rede de proteção — antes era 'except Exception: return' (engolia tudo)
-        console.print(f"\n[bold red]❌ Falha inesperada na inicialização:[/bold red]")
-        console.print_exception()  # imprime traceback completo via rich
+        # Ultimate safety net
+        console.print(f"\n[bold red]❌ Unexpected initialization failure:[/bold red]")
+        console.print_exception()  # prints full traceback via rich
         return
 
     assistant.console.print(Panel(
-        'Comandos disponíveis:\n'
-        '  [cyan]/search on|off[/cyan]   liga/desliga busca na web\n'
-        '  [cyan]/debug[/cyan]           mostra estrutura interna da última resposta\n'
-        '  [cyan]exit[/cyan] / [cyan]quit[/cyan]      encerra',
-        title="🤖 Comandos", border_style="white",
+        'Available Commands:\n'
+        '  [cyan]/search on|off[/cyan]   toggle web search\n'
+        '  [cyan]/debug[/cyan]           show internal structure of last response\n'
+        '  [cyan]exit[/cyan] / [cyan]quit[/cyan]      shutdown',
+        title="🤖 Commands", border_style="white",
     ))
 
     use_search = True
@@ -487,9 +488,9 @@ def main():
     while True:
         assistant.console.print()
         try:
-            q = input("Você: ").strip()
+            q = input("You: ").strip()
         except (EOFError, KeyboardInterrupt):
-            assistant.console.print("\n[yellow]Encerrando...[/yellow]")
+            assistant.console.print("\n[yellow]Shutting down...[/yellow]")
             break
         assistant.console.print()
 
@@ -501,15 +502,15 @@ def main():
         if q.lower().startswith("/search"):
             if "off" in q.lower():
                 use_search = False
-                assistant.console.print("🔴 [red]Busca web desativada.[/red]")
+                assistant.console.print("🔴 [red]Web search disabled.[/red]")
             elif "on" in q.lower():
                 use_search = True
-                assistant.console.print("🟢 [green]Busca web ativada.[/green]")
+                assistant.console.print("🟢 [green]Web search enabled.[/green]")
             continue
 
         if q.lower() == "/debug":
             if not last_final:
-                assistant.console.print("[dim]Nenhuma pergunta processada ainda.[/dim]")
+                assistant.console.print("[dim]No questions processed yet.[/dim]")
             else:
                 assistant.console.print(Panel(
                     last_final.model_dump_json(indent=2),
@@ -522,19 +523,15 @@ def main():
 
         assistant.console.print(Panel(
             Markdown(final.answer_markdown),
-            title=f"🤖 Resposta (confiança: {final.confidence_level})",
+            title=f"🤖 Answer (confidence: {final.confidence_level})",
             border_style="blue",
         ))
         if final.open_questions:
             assistant.console.print(Panel(
                 "\n".join(f"• {q}" for q in final.open_questions),
-                title="🔎 Questões em aberto", border_style="dim cyan",
+                title="🔎 Open Questions", border_style="dim cyan",
             ))
 
 
 if __name__ == "__main__":
-    # Note: deliberadamente NÃO chamamos os.system("clear") aqui — em alguns
-    # terminais (Windows sem TERM, IDEs, redirecionamento) isso pode causar
-    # comportamento inesperado e esconder mensagens de erro iniciais.
-    # Se quiser limpar, faça antes de invocar: `clear && python agent.py`
     main()
